@@ -57,13 +57,23 @@ class MainActivity : Activity() {
         escrever("Encontrados: ${lista.size}")
         val caminhos = mutableListOf<String>()
         var ok = 0
-        for (f in lista) {
+        val comData = lista.map { it to dataDe(it) }.sortedBy { it.second }
+        val contador = mutableMapOf<String, Int>()
+        // 1a etapa: nomes temporarios para nao dar conflito ao renomear
+        val temp = comData.mapIndexed { k, (f, d) ->
+            val t = File(f.parentFile, "tmp_org_${k}.${f.extension}")
+            caminhos.add(f.absolutePath)
+            (if (f.renameTo(t)) t else f) to d
+        }
+        for ((f, data) in temp) {
             try {
-                val destDir = File(dcim, fmtPasta.format(dataDe(f)))
+                val dia = fmtPasta.format(data)
+                val destDir = File(dcim, dia)
                 destDir.mkdirs()
-                var dest = File(destDir, f.name)
-                var n = 1
-                while (dest.exists()) { dest = File(destDir, "${f.nameWithoutExtension}_$n.${f.extension}"); n++ }
+                var dest: File
+                var i = contador[dia] ?: 0
+                do { dest = File(destDir, "${dia}_${letras(i)}.${f.extension.lowercase()}"); i++ } while (dest.exists())
+                contador[dia] = i
                 if (!f.renameTo(dest)) { f.copyTo(dest); f.delete() }
                 caminhos.add(f.absolutePath); caminhos.add(dest.absolutePath)
                 ok++
@@ -75,6 +85,13 @@ class MainActivity : Activity() {
         escrever("Concluído: $ok arquivos movidos.")
     }
 
+    private fun letras(n: Int): String {
+        var x = n
+        var s = ""
+        do { s = ('A' + x % 26) + s; x = x / 26 - 1 } while (x >= 0)
+        return s
+    }
+
     private fun coletar(dir: File, lista: MutableList<File>) {
         dir.listFiles()?.forEach { f ->
             if (f.isDirectory) {
@@ -82,7 +99,7 @@ class MainActivity : Activity() {
                     f.absolutePath == File(raiz, "Android/data").absolutePath ||
                     f.absolutePath == File(raiz, "Android/obb").absolutePath ||
                     f.name.contains("Stickers", true) ||
-                    (f.parentFile == dcim && pastaData.matches(f.name))
+                    false
                 if (!ignorar) coletar(f, lista)
             } else {
                 val ext = f.extension.lowercase()
