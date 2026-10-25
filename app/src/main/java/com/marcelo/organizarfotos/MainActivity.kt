@@ -88,7 +88,7 @@ class MainActivity : Activity() {
     private fun letras(n: Int): String {
         var x = n
         var s = ""
-        do { s = ('A' + x % 26) + s; x = x / 26 - 1 } while (x >= 0)
+        do { s = ('A' + x % 26).toString() + s; x = x / 26 - 1 } while (x >= 0)
         return s
     }
 
