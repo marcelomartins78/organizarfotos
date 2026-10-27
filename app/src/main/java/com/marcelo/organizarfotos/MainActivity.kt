@@ -281,7 +281,7 @@ class MainActivity : Activity() {
         info.text = "Procurando arquivos..."
         Thread {
             val arquivos = mutableListOf<File>()
-            Ferramentas.coletar(base ?: Ferramentas.raiz, arquivos)
+            if (base != null) Ferramentas.coletar(base, arquivos) else Ferramentas.raizes().forEach { Ferramentas.coletar(it, arquivos) }
             val total = arquivos.size
             val res = ArrayList<Midia>(total)
             for ((k, f) in arquivos.withIndex()) {
