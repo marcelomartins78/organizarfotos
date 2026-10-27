@@ -8,10 +8,22 @@ import android.media.MediaMetadataRetriever
 import android.media.ThumbnailUtils
 import android.os.Build
 import android.os.Environment
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.util.Size
 import androidx.exifinterface.media.ExifInterface
 import java.io.File
+import java.security.KeyStore
 import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.CipherInputStream
+import javax.crypto.CipherOutputStream
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -193,6 +205,20 @@ object Ferramentas {
 
     fun pastasOcultas(): List<Pair<File, String>> = lerIndice(cofre, indiceCofre)
 
+    // Pasta "nudes" do botão Especial: fica dentro do cofre (oculta e com senha)
+    @Synchronized fun pastaEspecial(): File? {
+        val p = File(cofre, "nudes")
+        if (p.exists()) return p
+        val velha = File(dcim, "nudes")
+        if (velha.exists()) return if (ocultarPasta(velha) != null) p else null
+        cofre.mkdirs()
+        val nm = File(cofre, ".nomedia")
+        if (!nm.exists()) nm.createNewFile()
+        if (!p.mkdirs()) return null
+        indiceCofre.appendText("nudes\t" + velha.absolutePath + "\n")
+        return p
+    }
+
     @Synchronized fun desocultar(dir: File, original: String): File? {
         val o = File(original)
         var dest = o
@@ -201,7 +227,93 @@ object Ferramentas {
         dest.parentFile?.mkdirs()
         if (!dir.renameTo(dest)) return null
         tirarDoIndice(indiceCofre, setOf(dir.name))
+        // Ao desocultar, os arquivos criptografados voltam ao normal
+        dest.walkTopDown().filter { it.isFile && it.extension == EXT }.toList().forEach { e ->
+            val normal = File(e.parentFile, e.nameWithoutExtension)
+            try { descriptografar(e, normal); e.delete() } catch (_: Exception) { normal.delete() }
+        }
         return dest
+    }
+
+    // ---------- Criptografia da pasta especial (nudes) ----------
+    const val EXT = "ofz"
+    private var chaveDados: SecretKey? = null
+
+    fun ehEspecial(p: File): Boolean = p.absolutePath == File(cofre, "nudes").absolutePath
+
+    // Chave mestra guardada no chip de segurança do celular (não sai de lá)
+    private fun chaveMestra(): SecretKey {
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (ks.getKey("cofreOrganizar", null) as? SecretKey)?.let { return it }
+        val g = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        g.init(KeyGenParameterSpec.Builder("cofreOrganizar", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build())
+        return g.generateKey()
+    }
+
+    // Chave dos arquivos, guardada trancada pela chave mestra
+    @Synchronized private fun chave(): SecretKey {
+        chaveDados?.let { return it }
+        val arq = File(cofre, ".chave")
+        val k: ByteArray
+        if (arq.exists()) {
+            val b = arq.readBytes()
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, chaveMestra(), GCMParameterSpec(128, b.copyOfRange(0, 12)))
+            k = c.doFinal(b.copyOfRange(12, b.size))
+        } else {
+            k = ByteArray(32).also { SecureRandom().nextBytes(it) }
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.ENCRYPT_MODE, chaveMestra())
+            cofre.mkdirs()
+            arq.writeBytes(c.iv + c.doFinal(k))
+        }
+        return SecretKeySpec(k, "AES").also { chaveDados = it }
+    }
+
+    fun criptografar(f: File, dest: File): Boolean {
+        if (dest.exists()) return false
+        val iv = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val c = Cipher.getInstance("AES/CTR/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, chave(), IvParameterSpec(iv))
+        dest.parentFile?.mkdirs()
+        try {
+            dest.outputStream().use { out ->
+                out.write(iv)
+                CipherOutputStream(out, c).use { co -> f.inputStream().use { it.copyTo(co, 65536) } }
+            }
+        } catch (e: Exception) { dest.delete(); throw e }
+        if (dest.length() != f.length() + 16) { dest.delete(); return false }
+        f.delete()
+        return true
+    }
+
+    fun descriptografar(f: File, dest: File) {
+        f.inputStream().use { inp ->
+            val iv = ByteArray(16)
+            var lidos = 0
+            while (lidos < 16) {
+                val n = inp.read(iv, lidos, 16 - lidos)
+                if (n < 0) throw java.io.IOException("arquivo incompleto")
+                lidos += n
+            }
+            val c = Cipher.getInstance("AES/CTR/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, chave(), IvParameterSpec(iv))
+            dest.parentFile?.mkdirs()
+            dest.outputStream().use { out -> CipherInputStream(inp, c).use { it.copyTo(out, 65536) } }
+        }
+    }
+
+    // Criptografa o que ainda estiver aberto dentro da pasta nudes
+    fun trancarPendentes(): Int {
+        var n = 0
+        File(cofre, "nudes").listFiles()?.filter { it.isFile && ehMidia(it) }?.forEach {
+            try { if (criptografar(it, File(it.path + "." + EXT))) n++ } catch (_: Exception) { }
+        }
+        return n
     }
 
     // ---------- Senha e repetidas ----------
