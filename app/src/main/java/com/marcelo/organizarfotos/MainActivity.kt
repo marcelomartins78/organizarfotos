@@ -125,6 +125,7 @@ class MainActivity : Activity() {
         val escuro = when (tema) { 1 -> false; 2 -> true; else -> noite }
         setTheme(if (escuro) android.R.style.Theme_DeviceDefault_NoActionBar else android.R.style.Theme_DeviceDefault_Light_NoActionBar)
         super.onCreate(savedInstanceState)
+        File(cacheDir, "cofre").deleteRecursively()
         lado = (resources.displayMetrics.widthPixels - 32) / colunas
         val tela = LinearLayout(this)
         tela.orientation = LinearLayout.VERTICAL
@@ -143,7 +144,7 @@ class MainActivity : Activity() {
         botao("🔍", "Procurar") { procurar() }
         botao("📤", "Encaminhar") { encaminharSelecionadas() }
         botao("🗑️", "Excluir") { excluirSelecionadas() }
-        botao("⭐", "Especial") { moverEspecial() }
+        botao("🔒", "Especial") { moverEspecial() }
         val topo = LinearLayout(this)
         topo.setGravity(Gravity.CENTER_VERTICAL)
         topo.addView(HorizontalScrollView(this).apply { addView(botoes) }, LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -230,6 +231,7 @@ class MainActivity : Activity() {
     override fun onStop() {
         super.onStop()
         handler.removeCallbacks(abrirCofre)
+        File(cacheDir, "cofre").deleteRecursively()
         if (pastaAberta != null) {
             pastaAberta = null
             grupos = null
@@ -366,6 +368,7 @@ class MainActivity : Activity() {
             montarLinhas()
         } else if (pastaAberta != null) {
             pastaAberta = null
+            File(cacheDir, "cofre").deleteRecursively()
             selecionadas.clear()
             todas = guardadas ?: emptyList()
             aplicarFiltros()
@@ -491,8 +494,7 @@ class MainActivity : Activity() {
         if (!selecionadas.remove(c)) selecionadas.add(c)
         atualizarLista()
     }
-
-        // ---------- Visualizar (com setinhas) ----------
+    // ---------- Visualizar (com setinhas) ----------
     private fun abrir(lista: List<Midia>, inicio: Int, naLixeira: Boolean = false) {
         if (lista.isEmpty()) return
         val itens = lista.toMutableList()
@@ -614,6 +616,7 @@ class MainActivity : Activity() {
     // ---------- Mover / Renomear ----------
     private fun iniciarServico(acao: String, alvo: List<Midia>, destino: File?) {
         if (ServicoOrganizar.rodando) { aviso("Já tem um processo rodando."); return }
+        if (pastaAberta?.absolutePath == pastaDecifrada().absolutePath) { aviso("Na pasta protegida dá só pra ver e excluir. Para tirar as fotos daqui, use Desocultar."); return }
         if (alvo.isEmpty()) { aviso("Nada para fazer."); return }
         ServicoOrganizar.fila = alvo
         ServicoOrganizar.acao = acao
@@ -675,9 +678,9 @@ class MainActivity : Activity() {
     private fun moverEspecial() {
         if (selecionadas.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto)."); return }
         val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
-        val pasta = File(Ferramentas.dcim, "nudes")
-        if (!pasta.exists() && !pasta.mkdirs()) { aviso("Não consegui criar a pasta DCIM/nudes."); return }
-        confirmar("Mover ${alvo.size} item(ns) para DCIM/nudes, renomeando com data + letras?") { iniciarServico("pasta", alvo, pasta) }
+        val pasta = Ferramentas.pastaEspecial()
+        if (pasta == null) { aviso("Não consegui preparar a pasta oculta nudes."); return }
+        confirmar("Mover ${alvo.size} item(ns) para a pasta oculta nudes (protegida por senha), renomeando com data + letras?") { iniciarServico("pasta", alvo, pasta) }
     }
 
     private fun escolherPasta(botao: String, atual: File, aoEscolher: (File) -> Unit) {
@@ -805,7 +808,11 @@ class MainActivity : Activity() {
             var falhas = 0
             for (m in alvo) {
                 val c = m.arquivo.absolutePath
-                try { if (Ferramentas.paraLixeira(m.arquivo)) feitos.add(c) else falhas++ } catch (_: Exception) { falhas++ }
+                val enc = encDe(m.arquivo)
+                try {
+                    if (enc != null) { if (Ferramentas.paraLixeira(enc)) { m.arquivo.delete(); feitos.add(c) } else falhas++ }
+                    else if (Ferramentas.paraLixeira(m.arquivo)) feitos.add(c) else falhas++
+                } catch (_: Exception) { falhas++ }
             }
             if (feitos.isNotEmpty()) MediaScannerConnection.scanFile(this@MainActivity, feitos.toTypedArray(), null, null)
             runOnUiThread {
@@ -981,7 +988,8 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle(f.name)
             .setItems(arrayOf("Ver fotos", "Desocultar")) { _, i ->
-                if (i == 0) {
+                if (i == 0 && Ferramentas.ehEspecial(f)) abrirEspecial(f)
+                else if (i == 0) {
                     grupos = null
                     selecionadas.clear()
                     pastaAberta = f
@@ -991,6 +999,35 @@ class MainActivity : Activity() {
                 }
             }
             .show()
+    }
+
+    // Pasta protegida: abre uma cópia legível só dentro do app, apagada ao sair
+    private fun pastaDecifrada() = File(cacheDir, "cofre/nudes")
+
+    private fun encDe(f: File): File? =
+        if (f.parentFile?.absolutePath == pastaDecifrada().absolutePath)
+            File(File(Ferramentas.cofre, "nudes"), f.name + "." + Ferramentas.EXT) else null
+
+    private fun abrirEspecial(f: File) {
+        info.text = "Abrindo pasta protegida..."
+        Thread {
+            var falhas = 0
+            val alvo = pastaDecifrada()
+            alvo.deleteRecursively()
+            alvo.mkdirs()
+            try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
+            f.listFiles()?.filter { it.isFile && it.extension == Ferramentas.EXT }?.forEach { e ->
+                val normal = File(alvo, e.nameWithoutExtension)
+                try { Ferramentas.descriptografar(e, normal) } catch (_: Exception) { normal.delete(); falhas++ }
+            }
+            runOnUiThread {
+                grupos = null
+                selecionadas.clear()
+                pastaAberta = alvo
+                procurar()
+                if (falhas > 0) aviso("$falhas arquivo(s) não puderam ser abertos.")
+            }
+        }.start()
     }
 
     private fun escolherOcultar() {
@@ -1050,3 +1087,4 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK", null).show()
     }
 }
+    
