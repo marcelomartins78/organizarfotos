@@ -13,6 +13,17 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
+    signingConfigs {
+        getByName("debug") {
+            // Transforma o chave.txt de volta no arquivo de chave
+            val jks = rootProject.file("chave-gerada.jks")
+            jks.writeBytes(java.util.Base64.getMimeDecoder().decode(rootProject.file("chave.txt").readText().trim()))
+            storeFile = jks
+            storePassword = "organizarfotos"
+            keyAlias = "organizar"
+            keyPassword = "organizarfotos"
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
