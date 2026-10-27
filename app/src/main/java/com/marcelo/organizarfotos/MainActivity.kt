@@ -494,7 +494,7 @@ class MainActivity : Activity() {
         if (!selecionadas.remove(c)) selecionadas.add(c)
         atualizarLista()
     }
-    // ---------- Visualizar (com setinhas) ----------
+        // ---------- Visualizar (com setinhas) ----------
     private fun abrir(lista: List<Midia>, inicio: Int, naLixeira: Boolean = false) {
         if (lista.isEmpty()) return
         val itens = lista.toMutableList()
@@ -1087,4 +1087,6 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK", null).show()
     }
 }
+
+
     
