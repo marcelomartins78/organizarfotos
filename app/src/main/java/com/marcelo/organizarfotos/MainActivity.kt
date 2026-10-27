@@ -38,6 +38,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.MediaController
+import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
@@ -130,20 +131,29 @@ class MainActivity : Activity() {
         tela.setPadding(16, 60, 16, 16)
 
         val botoes = LinearLayout(this)
-        fun botao(t: String, acao: () -> Unit) {
-            botoes.addView(Button(this).apply { text = t; isAllCaps = false; setOnClickListener { acao() } })
+        // Botões com ícone; segurando o dedo aparece o nome
+        fun botao(icone: String, nome: String, acao: () -> Unit) {
+            botoes.addView(Button(this).apply {
+                text = icone; textSize = 20f; isAllCaps = false
+                tooltipText = nome; contentDescription = nome
+                setOnClickListener { acao() }
+            })
         }
-        botao("Procurar") { procurar() }
-        botao("Mover p/ DCIM") { confirmarServico("mover") }
-        botao("Mover para...") { moverParaPasta() }
-        botao("Renomear") { confirmarServico("renomear") }
-        botao("Encaminhar") { encaminharSelecionadas() }
-        botao("Excluir") { excluirSelecionadas() }
-        botao("Repetidas") { menuRepetidas() }
-        botao("Lixeira") { abrirLixeira() }
-        botao("Tema") { escolherTema() }
-        botao("Limpar seleção") { selecionadas.clear(); atualizarLista() }
-        tela.addView(HorizontalScrollView(this).apply { addView(botoes) })
+        // Só os mais usados ficam à mostra; o resto vai no menu ⋮
+        botao("🔍", "Procurar") { procurar() }
+        botao("📤", "Encaminhar") { encaminharSelecionadas() }
+        botao("🗑️", "Excluir") { excluirSelecionadas() }
+        botao("⭐", "Especial") { moverEspecial() }
+        val topo = LinearLayout(this)
+        topo.setGravity(Gravity.CENTER_VERTICAL)
+        topo.addView(HorizontalScrollView(this).apply { addView(botoes) }, LinearLayout.LayoutParams(0, WRAP, 1f))
+        val tresPontos = Button(this).apply {
+            text = "⋮"; textSize = 22f; isAllCaps = false
+            tooltipText = "Mais opções"; contentDescription = "Mais opções"
+        }
+        tresPontos.setOnClickListener { menuMais(tresPontos) }
+        topo.addView(tresPontos)
+        tela.addView(topo)
 
         busca = EditText(this)
         busca.hint = "Filtrar por nome"
@@ -165,7 +175,8 @@ class MainActivity : Activity() {
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
         val limpar = Button(this).apply {
-            text = "Limpar filtros"; isAllCaps = false
+            text = "🧹"; textSize = 20f; isAllCaps = false
+            tooltipText = "Limpar filtros"; contentDescription = "Limpar filtros"
             setOnClickListener {
                 busca.setText(""); de = null; ate = null
                 botaoDe.text = "De: —"; botaoAte.text = "Até: —"
@@ -187,7 +198,7 @@ class MainActivity : Activity() {
         faixaTexto = TextView(this)
         faixaTexto.textSize = 15f
         faixa.addView(faixaTexto, LinearLayout.LayoutParams(0, WRAP, 1f))
-        faixa.addView(Button(this).apply { text = "Sair"; isAllCaps = false; setOnClickListener { sairModo() } })
+        faixa.addView(Button(this).apply { text = "✖"; textSize = 20f; tooltipText = "Sair"; contentDescription = "Sair"; setOnClickListener { sairModo() } })
         tela.addView(faixa)
 
         info = TextView(this).apply { textSize = 15f; setPadding(0, 10, 0, 10) }
@@ -480,6 +491,7 @@ class MainActivity : Activity() {
         if (!selecionadas.remove(c)) selecionadas.add(c)
         atualizarLista()
     }
+
         // ---------- Visualizar (com setinhas) ----------
     private fun abrir(lista: List<Midia>, inicio: Int, naLixeira: Boolean = false) {
         if (lista.isEmpty()) return
@@ -538,14 +550,14 @@ class MainActivity : Activity() {
 
         val barra = LinearLayout(this)
         fun botaoBarra(t: String, acao: () -> Unit) {
-            barra.addView(Button(this).apply { text = t; isAllCaps = false; textSize = 13f; setOnClickListener { acao() } },
+            barra.addView(Button(this).apply { text = t; isAllCaps = false; textSize = 20f; setOnClickListener { acao() } },
                 LinearLayout.LayoutParams(0, WRAP, 1f))
         }
         botaoBarra("◀") { if (pos > 0) { pos--; mostrar() } }
         botaoBarra("▶") { if (pos < itens.size - 1) { pos++; mostrar() } }
         if (!naLixeira) {
-            botaoBarra("Enviar") { encaminhar(listOf(itens[pos])) }
-            botaoBarra("Excluir") {
+            botaoBarra("📤") { encaminhar(listOf(itens[pos])) }
+            botaoBarra("🗑️") {
                 confirmar("Mandar para a lixeira do app?") {
                     video?.stopPlayback()
                     video = null
@@ -560,7 +572,7 @@ class MainActivity : Activity() {
                 }
             }
         }
-        botaoBarra("Fechar") { d.dismiss() }
+        botaoBarra("✖") { d.dismiss() }
         tela.addView(barra)
         d.setOnDismissListener { video?.stopPlayback() }
         mostrar()
@@ -640,6 +652,32 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    // Menu dos três pontinhos (canto superior direito)
+    private fun menuMais(ancora: View) {
+        val opcoes: List<Pair<String, () -> Unit>> = listOf(
+            "📥  Mover p/ DCIM" to { confirmarServico("mover") },
+            "📂  Mover para..." to { moverParaPasta() },
+            "✏️  Renomear" to { confirmarServico("renomear") },
+            "👥  Repetidas" to { menuRepetidas() },
+            "♻️  Lixeira" to { abrirLixeira() },
+            "🌓  Tema" to { escolherTema() },
+            "❎  Limpar seleção" to { selecionadas.clear(); atualizarLista() }
+        )
+        val p = PopupMenu(this, ancora)
+        opcoes.forEachIndexed { i, o -> p.menu.add(0, i, i, o.first) }
+        p.setOnMenuItemClickListener { opcoes[it.itemId].second(); true }
+        p.show()
+    }
+
+    // Botão Especial: manda as selecionadas para DCIM/nudes, renomeando com data + letras
+    private fun moverEspecial() {
+        if (selecionadas.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto)."); return }
+        val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
+        val pasta = File(Ferramentas.dcim, "nudes")
+        if (!pasta.exists() && !pasta.mkdirs()) { aviso("Não consegui criar a pasta DCIM/nudes."); return }
+        confirmar("Mover ${alvo.size} item(ns) para DCIM/nudes, renomeando com data + letras?") { iniciarServico("pasta", alvo, pasta) }
     }
 
     private fun escolherPasta(botao: String, atual: File, aoEscolher: (File) -> Unit) {
