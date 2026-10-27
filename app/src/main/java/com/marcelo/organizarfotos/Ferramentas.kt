@@ -71,11 +71,16 @@ object Ferramentas {
                     c.endsWith("/Android/obb") ||
                     c == lixeira.absolutePath ||
                     c == cofre.absolutePath ||
-                    f.name.contains("Stickers", true)
+                    f.name.contains("Stickers", true) ||
+                    ehCache(f)
                 if (!ignorar) coletar(f, lista)
             } else if (ehMidia(f)) lista.add(f)
         }
     }
+
+    // Pastas de cache de aplicativos (AliExpress, Shopee etc.) não entram na busca
+    private val nomesCache = listOf("cache", "gs_fs", "aliexpress", "shopee", "temp", "tmp")
+    fun ehCache(f: File): Boolean = nomesCache.any { f.name.contains(it, true) }
 
     fun subpastas(dir: File): List<File> =
         (dir.listFiles() ?: emptyArray()).filter { it.isDirectory && !it.name.startsWith(".") }
