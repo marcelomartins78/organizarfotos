@@ -33,6 +33,8 @@ object Ferramentas {
     val videos = setOf("mp4", "3gp", "mkv", "mov", "webm")
     val raiz: File = Environment.getExternalStorageDirectory()
     val dcim = File(raiz, "DCIM")
+    // Espaço principal + espaço do Dual Apps (Xiaomi), se o sistema deixar ler
+    fun raizes(): List<File> = listOf(raiz) + listOf(File("/storage/emulated/999")).filter { it.exists() && it.canRead() }
     val lixeira = File(raiz, ".LixeiraOrganizarFotos")
     val cofre = File(raiz, ".CofreOrganizarFotos")
     private val indice = File(lixeira, "indice.txt")
@@ -65,8 +67,8 @@ object Ferramentas {
             if (f.isDirectory) {
                 val c = f.absolutePath
                 val ignorar = f.name.contains("thumb", true) ||
-                    c == File(raiz, "Android/data").absolutePath ||
-                    c == File(raiz, "Android/obb").absolutePath ||
+                    c.endsWith("/Android/data") ||
+                    c.endsWith("/Android/obb") ||
                     c == lixeira.absolutePath ||
                     c == cofre.absolutePath ||
                     f.name.contains("Stickers", true)
