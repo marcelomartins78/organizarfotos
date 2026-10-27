@@ -2,15 +2,16 @@ package com.marcelo.organizarfotos
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import android.media.ThumbnailUtils
 import android.os.Build
 import android.os.Environment
-import android.provider.MediaStore
 import android.util.Size
 import androidx.exifinterface.media.ExifInterface
 import java.io.File
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -21,7 +22,10 @@ class Midia(val arquivo: File, val data: Date) {
     val migrada = Ferramentas.estaMigrada(arquivo)
 }
 
-class Cabecalho(val dia: String, val qtd: Int, val tudoVerde: Boolean)
+class Cabecalho(val titulo: String, val itens: List<Midia>) {
+    val tudoVerde = itens.all { it.migrada }
+}
+
 class Linha(val itens: List<Midia>)
 
 object Ferramentas {
@@ -30,7 +34,9 @@ object Ferramentas {
     val raiz: File = Environment.getExternalStorageDirectory()
     val dcim = File(raiz, "DCIM")
     val lixeira = File(raiz, ".LixeiraOrganizarFotos")
+    val cofre = File(raiz, ".CofreOrganizarFotos")
     private val indice = File(lixeira, "indice.txt")
+    private val indiceCofre = File(cofre, "indice.txt")
     private val nomeCerto = Regex("([0-9]{4}-[0-9]{2}-[0-9]{2})_[A-Z]+[.][A-Za-z0-9]+")
 
     fun dia(d: Date): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
@@ -41,7 +47,6 @@ object Ferramentas {
         return ext in fotos || ext in videos
     }
 
-    // Verde: está em DCIM/AAAA-MM-DD e o nome começa com a mesma data + letras
     fun estaMigrada(f: File): Boolean {
         val m = nomeCerto.matchEntire(f.name) ?: return false
         val pasta = f.parentFile ?: return false
@@ -63,11 +68,16 @@ object Ferramentas {
                     c == File(raiz, "Android/data").absolutePath ||
                     c == File(raiz, "Android/obb").absolutePath ||
                     c == lixeira.absolutePath ||
+                    c == cofre.absolutePath ||
                     f.name.contains("Stickers", true)
                 if (!ignorar) coletar(f, lista)
             } else if (ehMidia(f)) lista.add(f)
         }
     }
+
+    fun subpastas(dir: File): List<File> =
+        (dir.listFiles() ?: emptyArray()).filter { it.isDirectory && !it.name.startsWith(".") }
+            .sortedBy { it.name.lowercase() }
 
     private fun ano(d: Date): Int = Calendar.getInstance().apply { time = d }.get(Calendar.YEAR)
 
@@ -105,7 +115,6 @@ object Ferramentas {
         return Date(f.lastModified())
     }
 
-    // Move com segurança: nunca sobrescreve e confere o tamanho
     fun mover(f: File, dest: File): Boolean {
         if (dest.exists()) return false
         val tam = f.length()
@@ -117,7 +126,22 @@ object Ferramentas {
         return false
     }
 
-    // ---------- Lixeira própria do app ----------
+    // ---------- Índices (lixeira e cofre) ----------
+    private fun lerIndice(pasta: File, ind: File): List<Pair<File, String>> {
+        if (!ind.exists()) return emptyList()
+        return ind.readLines().mapNotNull { l ->
+            val p = l.split("\t")
+            if (p.size == 2 && File(pasta, p[0]).exists()) File(pasta, p[0]) to p[1] else null
+        }
+    }
+
+    private fun tirarDoIndice(ind: File, nomes: Set<String>) {
+        if (!ind.exists()) return
+        val sobra = ind.readLines().filter { it.isNotBlank() && it.substringBefore("\t") !in nomes }
+        ind.writeText(sobra.joinToString("") { it + "\n" })
+    }
+
+    // ---------- Lixeira ----------
     @Synchronized fun paraLixeira(f: File): Boolean {
         lixeira.mkdirs()
         val nm = File(lixeira, ".nomedia")
@@ -129,13 +153,7 @@ object Ferramentas {
         return true
     }
 
-    fun itensLixeira(): List<Pair<File, String>> {
-        if (!indice.exists()) return emptyList()
-        return indice.readLines().mapNotNull { l ->
-            val p = l.split("\t")
-            if (p.size == 2 && File(lixeira, p[0]).exists()) File(lixeira, p[0]) to p[1] else null
-        }
-    }
+    fun itensLixeira(): List<Pair<File, String>> = lerIndice(lixeira, indice)
 
     @Synchronized fun restaurar(f: File, original: String): File? {
         val o = File(original)
@@ -143,33 +161,121 @@ object Ferramentas {
         var n = 1
         while (dest.exists()) { dest = File(o.parentFile, "${o.nameWithoutExtension}_$n.${o.extension}"); n++ }
         if (!mover(f, dest)) return null
-        tirarDoIndice(setOf(f.name))
+        tirarDoIndice(indice, setOf(f.name))
         return dest
     }
 
     @Synchronized fun apagarDeVez(itens: List<File>) {
         itens.forEach { it.delete() }
-        tirarDoIndice(itens.map { it.name }.toSet())
+        tirarDoIndice(indice, itens.map { it.name }.toSet())
     }
 
-    private fun tirarDoIndice(nomes: Set<String>) {
-        if (!indice.exists()) return
-        val sobra = indice.readLines().filter { it.isNotBlank() && it.substringBefore("\t") !in nomes }
-        indice.writeText(sobra.joinToString("") { it + "\n" })
+    // ---------- Pastas ocultas (cofre) ----------
+    @Synchronized fun ocultarPasta(dir: File): List<String>? {
+        cofre.mkdirs()
+        val nm = File(cofre, ".nomedia")
+        if (!nm.exists()) nm.createNewFile()
+        val antigos = dir.walkTopDown().filter { it.isFile && ehMidia(it) }.map { it.absolutePath }.toList()
+        var nome = dir.name
+        var n = 1
+        while (File(cofre, nome).exists()) { nome = "${dir.name}_$n"; n++ }
+        if (!dir.renameTo(File(cofre, nome))) return null
+        indiceCofre.appendText(nome + "\t" + dir.absolutePath + "\n")
+        return antigos
+    }
+
+    fun pastasOcultas(): List<Pair<File, String>> = lerIndice(cofre, indiceCofre)
+
+    @Synchronized fun desocultar(dir: File, original: String): File? {
+        val o = File(original)
+        var dest = o
+        var n = 1
+        while (dest.exists()) { dest = File(o.parentFile, "${o.name}_$n"); n++ }
+        dest.parentFile?.mkdirs()
+        if (!dir.renameTo(dest)) return null
+        tirarDoIndice(indiceCofre, setOf(dir.name))
+        return dest
+    }
+
+    // ---------- Senha e repetidas ----------
+    private fun hex(b: ByteArray): String = b.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+
+    fun resumo(texto: String): String = hex(MessageDigest.getInstance("SHA-256").digest(texto.toByteArray()))
+
+    fun md5(f: File): String {
+        val md = MessageDigest.getInstance("MD5")
+        f.inputStream().use { inp ->
+            val buf = ByteArray(65536)
+            while (true) {
+                val n = inp.read(buf)
+                if (n <= 0) break
+                md.update(buf, 0, n)
+            }
+        }
+        return hex(md.digest())
+    }
+
+    private fun cinza(c: Int): Int = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000
+
+    fun dHash(f: File): Long? {
+        val b = carregarImagem(f, 64) ?: return null
+        val p = Bitmap.createScaledBitmap(b, 9, 8, true)
+        var h = 0L
+        var bit = 0
+        for (y in 0 until 8) for (x in 0 until 8) {
+            if (cinza(p.getPixel(x, y)) > cinza(p.getPixel(x + 1, y))) h = h or (1L shl bit)
+            bit++
+        }
+        if (p != b) p.recycle()
+        b.recycle()
+        return h
     }
 
     // ---------- Miniaturas e visualização ----------
     fun miniatura(m: Midia, lado: Int): Bitmap? = try {
-        if (Build.VERSION.SDK_INT >= 29) {
-            if (m.video) ThumbnailUtils.createVideoThumbnail(m.arquivo, Size(lado, lado), null)
-            else ThumbnailUtils.createImageThumbnail(m.arquivo, Size(lado, lado), null)
-        } else if (m.video) miniaturaVideoAntiga(m.arquivo)
+        if (m.video) miniaturaVideo(m.arquivo, lado)
+        else if (Build.VERSION.SDK_INT >= 29) ThumbnailUtils.createImageThumbnail(m.arquivo, Size(lado, lado), null)
         else carregarImagem(m.arquivo, lado)
     } catch (_: Exception) { null }
 
-    @Suppress("DEPRECATION")
-    private fun miniaturaVideoAntiga(f: File): Bitmap? =
-        ThumbnailUtils.createVideoThumbnail(f.absolutePath, MediaStore.Images.Thumbnails.MINI_KIND)
+    // Pega um quadro do vídeo que não seja preto (tenta 1s, 1/3, metade, 3s)
+    fun miniaturaVideo(f: File, lado: Int): Bitmap? {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(f.absolutePath)
+            val dur = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val tempos = listOf(1000L, dur / 3, dur / 2, 3000L).filter { it in 0..dur }.distinct().ifEmpty { listOf(0L) }
+            var melhor: Bitmap? = null
+            for (t in tempos) {
+                val q = quadro(r, t * 1000, lado) ?: continue
+                melhor = q
+                if (!escura(q)) break
+            }
+            return melhor
+        } catch (_: Exception) {
+            return null
+        } finally {
+            try { r.release() } catch (_: Exception) { }
+        }
+    }
+
+    private fun quadro(r: MediaMetadataRetriever, us: Long, lado: Int): Bitmap? =
+        if (Build.VERSION.SDK_INT >= 27) r.getScaledFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, lado, lado)
+        else r.getFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+
+    private fun escura(b: Bitmap): Boolean {
+        var soma = 0L
+        var n = 0
+        val px = maxOf(1, b.width / 10)
+        val py = maxOf(1, b.height / 10)
+        var y = 0
+        while (y < b.height) {
+            var x = 0
+            while (x < b.width) { soma += cinza(b.getPixel(x, y)); n++; x += px }
+            y += py
+        }
+        return n == 0 || soma / n < 25
+    }
 
     fun carregarImagem(f: File, lado: Int): Bitmap? {
         val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
