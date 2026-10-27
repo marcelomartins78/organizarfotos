@@ -72,7 +72,8 @@ class ServicoOrganizar : Service() {
     private fun processar() {
         val tipo = acao
         val pastaDestino = destino
-        val verbo = if (tipo == "renomear") "Renomeando" else "Movendo"
+        val cripto = tipo == "pasta" && pastaDestino != null && Ferramentas.ehEspecial(pastaDestino)
+        val verbo = if (tipo == "renomear") "Renomeando" else if (cripto) "Protegendo" else "Movendo"
         val lista = fila.sortedBy { it.data }
         val total = lista.size
         val contador = mutableMapOf<String, Int>()
@@ -100,13 +101,16 @@ class ServicoOrganizar : Service() {
                     val chave = destDir.absolutePath + "|" + dia
                     var i = contador[chave] ?: 0
                     var dest: File
-                    do { dest = File(destDir, "${dia}_${Ferramentas.letras(i)}.${f.extension.lowercase()}"); i++ } while (dest.exists())
+                    do { dest = File(destDir, "${dia}_${Ferramentas.letras(i)}.${f.extension.lowercase()}"); i++ } while (dest.exists() || File(dest.path + "." + Ferramentas.EXT).exists())
                     contador[chave] = i
                     val origem = f.absolutePath
-                    if (Ferramentas.mover(f, dest)) {
-                        dest.setLastModified(m.data.time)
+                    val deuCerto = if (cripto) Ferramentas.criptografar(f, File(dest.path + "." + Ferramentas.EXT)) else Ferramentas.mover(f, dest)
+                    if (deuCerto) {
                         caminhos.add(origem)
-                        caminhos.add(dest.absolutePath)
+                        if (!cripto) {
+                            dest.setLastModified(m.data.time)
+                            caminhos.add(dest.absolutePath)
+                        }
                         ok++
                     } else {
                         erros++
@@ -122,6 +126,7 @@ class ServicoOrganizar : Service() {
             if (feitos % 20 == 0 || feitos == total)
                 nm.notify(1, notificacao("$feitos de $total — erros: $erros", total, feitos))
         }
+        if (cripto) try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
         if (caminhos.isNotEmpty()) MediaScannerConnection.scanFile(this, caminhos.toTypedArray(), null, null)
         status = "CONCLUÍDO.\nTotal: $total | Feitos: $ok | Erros: $erros | Pulados: $pulados"
     }
