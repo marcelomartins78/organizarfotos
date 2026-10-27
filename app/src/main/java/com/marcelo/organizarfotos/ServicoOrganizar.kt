@@ -20,6 +20,7 @@ class ServicoOrganizar : Service() {
         val log = StringBuffer()
         @Volatile var fila: List<Midia> = emptyList()
         @Volatile var acao = "mover"
+        @Volatile var destino: File? = null
     }
 
     private lateinit var nm: NotificationManager
@@ -69,8 +70,9 @@ class ServicoOrganizar : Service() {
     private fun escrever(t: String) { log.append(t + "\n") }
 
     private fun processar() {
-        val mover = acao == "mover"
-        val verbo = if (mover) "Movendo" else "Renomeando"
+        val tipo = acao
+        val pastaDestino = destino
+        val verbo = if (tipo == "renomear") "Renomeando" else "Movendo"
         val lista = fila.sortedBy { it.data }
         val total = lista.size
         val contador = mutableMapOf<String, Int>()
@@ -84,12 +86,18 @@ class ServicoOrganizar : Service() {
                 val dia = Ferramentas.dia(m.data)
                 val jaTemNome = f.name.startsWith(dia + "_") &&
                     f.nameWithoutExtension.substringAfter('_').all { it in 'A'..'Z' }
-                if (!f.exists() || m.migrada || (!mover && jaTemNome)) {
+                val destDir = when (tipo) {
+                    "mover" -> File(Ferramentas.dcim, dia)
+                    "pasta" -> pastaDestino ?: File(Ferramentas.dcim, dia)
+                    else -> f.parentFile ?: Ferramentas.raiz
+                }
+                val mesmaPasta = f.parentFile?.absolutePath == destDir.absolutePath
+                val pular = !f.exists() || (tipo != "pasta" && m.migrada) || (mesmaPasta && jaTemNome)
+                if (pular) {
                     pulados++
                 } else {
-                    val destDir = if (mover) File(Ferramentas.dcim, dia) else f.parentFile!!
                     destDir.mkdirs()
-                    val chave = destDir.absolutePath
+                    val chave = destDir.absolutePath + "|" + dia
                     var i = contador[chave] ?: 0
                     var dest: File
                     do { dest = File(destDir, "${dia}_${Ferramentas.letras(i)}.${f.extension.lowercase()}"); i++ } while (dest.exists())
