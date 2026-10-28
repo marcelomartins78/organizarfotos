@@ -84,6 +84,7 @@ object Ferramentas {
                     c == lixeira.absolutePath ||
                     c == cofre.absolutePath ||
                     f.name.contains("Stickers", true) ||
+                    f.name.startsWith(".") ||
                     ehCache(f)
                 if (!ignorar) coletar(f, lista)
             } else if (ehMidia(f)) lista.add(f)
@@ -93,6 +94,17 @@ object Ferramentas {
     // Pastas de cache de aplicativos (AliExpress, Shopee etc.) não entram na busca
     private val nomesCache = listOf("cache", "gs_fs", "aliexpress", "shopee", "temp", "tmp")
     fun ehCache(f: File): Boolean = nomesCache.any { f.name.contains(it, true) }
+
+    // Apaga os Status do WhatsApp (somem em 24h de qualquer jeito)
+    fun limparStatus(): Int {
+        var n = 0
+        for (r in raizes()) for (app in listOf("com.whatsapp/WhatsApp", "com.whatsapp.w4b/WhatsApp Business")) {
+            File(r, "Android/media/$app/Media/.Statuses").listFiles()?.forEach {
+                if (it.isFile && ehMidia(it) && it.delete()) n++
+            }
+        }
+        return n
+    }
 
     fun subpastas(dir: File): List<File> =
         (dir.listFiles() ?: emptyArray()).filter { it.isDirectory && !it.name.startsWith(".") }
