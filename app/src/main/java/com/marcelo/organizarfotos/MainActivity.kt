@@ -141,10 +141,8 @@ class MainActivity : Activity() {
             })
         }
         // Só os mais usados ficam à mostra; o resto vai no menu ⋮
-        botao("🔍", "Procurar") { procurar() }
-        botao("📤", "Encaminhar") { encaminharSelecionadas() }
+        botao("📥", "Mover p/ DCIM") { confirmarServico("mover") }
         botao("🗑️", "Excluir") { excluirSelecionadas() }
-        botao("🔒", "Especial") { moverEspecial() }
         val topo = LinearLayout(this)
         topo.setGravity(Gravity.CENTER_VERTICAL)
         topo.addView(HorizontalScrollView(this).apply { addView(botoes) }, LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -164,7 +162,7 @@ class MainActivity : Activity() {
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: Editable?) { aplicarFiltros() }
         })
-        tela.addView(busca)
+        // Campo de filtro por nome fica escondido (não é usado)
 
         val filtros = LinearLayout(this)
         botaoDe = Button(this).apply { text = "De: —"; isAllCaps = false; setOnClickListener { escolherData(true) } }
@@ -293,6 +291,7 @@ class MainActivity : Activity() {
         val base = pastaAberta
         info.text = "Procurando arquivos..."
         Thread {
+            if (base == null) try { Ferramentas.limparStatus() } catch (_: Exception) { }
             val arquivos = mutableListOf<File>()
             if (base != null) Ferramentas.coletar(base, arquivos) else Ferramentas.raizes().forEach { Ferramentas.coletar(it, arquivos) }
             val total = arquivos.size
@@ -660,7 +659,9 @@ class MainActivity : Activity() {
     // Menu dos três pontinhos (canto superior direito)
     private fun menuMais(ancora: View) {
         val opcoes: List<Pair<String, () -> Unit>> = listOf(
-            "📥  Mover p/ DCIM" to { confirmarServico("mover") },
+            "🔍  Procurar" to { procurar() },
+            "📤  Encaminhar" to { encaminharSelecionadas() },
+            "🔒  Especial" to { moverEspecial() },
             "📂  Mover para..." to { moverParaPasta() },
             "✏️  Renomear" to { confirmarServico("renomear") },
             "👥  Repetidas" to { menuRepetidas() },
@@ -978,7 +979,7 @@ class MainActivity : Activity() {
         else b.setItems(pastas.map { (f, o) -> "🔒 ${f.name}\n   era: " + relativo(File(o).parentFile ?: Ferramentas.raiz) }.toTypedArray()) { _, i ->
             opcoesOculta(pastas[i].first, pastas[i].second)
         }
-        b.setPositiveButton("Ocultar uma pasta") { _, _ -> escolherOcultar() }
+        b.setPositiveButton("Esconder outra pasta?") { _, _ -> escolherOcultar() }
             .setNeutralButton("Trocar senha") { _, _ -> criarPin { aviso("Senha trocada.") } }
             .setNegativeButton("Fechar", null)
             .show()
@@ -1016,6 +1017,8 @@ class MainActivity : Activity() {
             alvo.deleteRecursively()
             alvo.mkdirs()
             try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
+            val abertas = f.listFiles()?.count { it.isFile && Ferramentas.ehMidia(it) } ?: 0
+            val protegidas = f.listFiles()?.count { it.isFile && it.extension == Ferramentas.EXT } ?: 0
             f.listFiles()?.filter { it.isFile && it.extension == Ferramentas.EXT }?.forEach { e ->
                 val normal = File(alvo, e.nameWithoutExtension)
                 try { Ferramentas.descriptografar(e, normal) } catch (_: Exception) { normal.delete(); falhas++ }
@@ -1026,6 +1029,8 @@ class MainActivity : Activity() {
                 pastaAberta = alvo
                 procurar()
                 if (falhas > 0) aviso("$falhas arquivo(s) não puderam ser abertos.")
+                else if (protegidas == 0 && abertas == 0) aviso("A pasta protegida está vazia.")
+                else if (abertas > 0) aviso("$abertas arquivo(s) ainda não foram protegidos. Eles continuam guardados na pasta, sem perder nada.")
             }
         }.start()
     }
@@ -1087,6 +1092,3 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK", null).show()
     }
 }
-
-
-    
