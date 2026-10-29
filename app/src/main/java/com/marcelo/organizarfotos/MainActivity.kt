@@ -26,6 +26,7 @@ import android.text.TextWatcher
 import android.util.LruCache
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
@@ -86,8 +87,14 @@ class MainActivity : Activity() {
     private var grupos: List<List<Midia>>? = null
     private var tipoRepetidas = ""
     private var pastaAberta: File? = null
-    private val colunas = 4
+    // Pinça: 0 = por dia (4 por linha), 1 = por mês, 2 = por ano, 3 = tudo junto
+    private val NIVEIS = intArrayOf(4, 6, 8, 10)
+    private var nivel = 0
+    private var colunas = 4
     private var lado = 200
+    private var fatorPinca = 1f
+    private var cancelouToque = false
+    private val meses = arrayOf("Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro")
 
     private lateinit var info: TextView
     private lateinit var busca: EditText
@@ -136,6 +143,8 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         File(cacheDir, "cofre").deleteRecursively()
         File(cacheDir, "compartilhar").deleteRecursively()
+        nivel = prefs().getInt("nivel", 0).coerceIn(0, NIVEIS.size - 1)
+        colunas = NIVEIS[nivel]
         lado = (resources.displayMetrics.widthPixels - 32) / colunas
         val tela = LinearLayout(this)
         tela.orientation = LinearLayout.VERTICAL
@@ -197,7 +206,7 @@ class MainActivity : Activity() {
         filtros.addView(botaoAte)
         filtros.addView(situacao)
         filtros.addView(limpar)
-        tela.addView(HorizontalScrollView(this).apply { addView(filtros) })
+        // A linha de filtros (De, Até, Todas, limpar) não aparece mais
 
         faixa = LinearLayout(this)
         faixa.setGravity(Gravity.CENTER_VERTICAL)
@@ -242,7 +251,7 @@ class MainActivity : Activity() {
         else if (!jaProcurou) procurar()
     }
 
-    // Toda vez que o app abre, fotos e vídeos do WhatsApp vão direto para a pasta protegida (nudes)
+    // Toda vez que o app abre, fotos e vídeos do WhatsApp vão direto para a pasta protegida
     private fun protegerWhatsApp() {
         verificandoWhats = true
         Thread {
@@ -262,6 +271,8 @@ class MainActivity : Activity() {
     override fun onStop() {
         super.onStop()
         handler.removeCallbacks(abrirCofre)
+        // Ao fechar, apaga as pastas vazias do DCIM (se nada estiver sendo movido)
+        if (!ServicoOrganizar.rodando && esperando < 0) Thread { try { Ferramentas.apagarPastasVazias() } catch (_: Exception) { } }.start()
         File(cacheDir, "cofre").deleteRecursively()
         if (pastaAberta != null) {
             pastaAberta = null
@@ -281,8 +292,54 @@ class MainActivity : Activity() {
     }
 
     override fun dispatchTouchEvent(e: MotionEvent): Boolean {
-        if (::lista.isInitialized) gesto(e)
+        if (::lista.isInitialized) {
+            pinca.onTouchEvent(e)
+            // Com dois dedos é pinça: a lista não rola nem seleciona foto
+            if (e.pointerCount > 1) {
+                puxando = false
+                handler.removeCallbacks(abrirCofre)
+                if (!cancelouToque) {
+                    cancelouToque = true
+                    val c = MotionEvent.obtain(e)
+                    c.action = MotionEvent.ACTION_CANCEL
+                    super.dispatchTouchEvent(c)
+                    c.recycle()
+                }
+                return true
+            }
+            if (e.actionMasked == MotionEvent.ACTION_DOWN) cancelouToque = false
+            if (cancelouToque) return true
+            gesto(e)
+        }
         return super.dispatchTouchEvent(e)
+    }
+
+    private val pinca by lazy {
+        ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(d: ScaleGestureDetector): Boolean { fatorPinca = 1f; return true }
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                fatorPinca *= d.scaleFactor
+                if (fatorPinca < 0.7f) { mudarNivel(1); fatorPinca = 1f }
+                else if (fatorPinca > 1.4f) { mudarNivel(-1); fatorPinca = 1f }
+                return true
+            }
+        })
+    }
+
+    // Fechar os dedos: miniaturas menores e agrupa por mês, ano ou tudo junto
+    private fun mudarNivel(d: Int) {
+        val n = (nivel + d).coerceIn(0, NIVEIS.size - 1)
+        if (n == nivel) return
+        val topo = linhas.getOrNull(lista.firstVisiblePosition)
+        val ref = (topo as? Linha)?.itens?.firstOrNull() ?: (topo as? Cabecalho)?.itens?.firstOrNull()
+        nivel = n
+        prefs().edit().putInt("nivel", n).apply()
+        colunas = NIVEIS[n]
+        lado = (resources.displayMetrics.widthPixels - 32) / colunas
+        lista.adapter = adaptador
+        montarLinhas()
+        val i = linhas.indexOfFirst { it is Linha && ref != null && ref in it.itens }
+        if (i >= 0) lista.setSelection(if (i > 0 && linhas[i - 1] is Cabecalho) i - 1 else i)
     }
 
     private fun gesto(e: MotionEvent) {
@@ -367,8 +424,9 @@ class MainActivity : Activity() {
             }
             visiveis = g.flatten()
         } else {
-            filtradas.groupBy { Ferramentas.dia(it.data) }.forEach { (dia, itens) ->
-                val t = "${formatarDia(dia)} — ${itens.size} " + (if (itens.size == 1) "item" else "itens")
+            if (nivel == NIVEIS.size - 1) filtradas.chunked(colunas).forEach { linhas.add(Linha(it)) }
+            else filtradas.groupBy { Ferramentas.dia(it.data).take(if (nivel == 0) 10 else if (nivel == 1) 7 else 4) }.forEach { (k, itens) ->
+                val t = "${tituloGrupo(k)} — ${itens.size} " + (if (itens.size == 1) "item" else "itens")
                 linhas.add(Cabecalho(t, itens))
                 itens.chunked(colunas).forEach { linhas.add(Linha(it)) }
             }
@@ -419,6 +477,16 @@ class MainActivity : Activity() {
         }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
     }
 
+    // "2026-10-27" vira 27/10/2026; "2026-10" vira Outubro 2026; "2026" fica igual
+    private fun tituloGrupo(k: String): String {
+        val p = k.split("-")
+        return when (p.size) {
+            3 -> formatarDia(k)
+            2 -> (p[1].toIntOrNull()?.let { meses.getOrNull(it - 1) } ?: p[1]) + " " + p[0]
+            else -> k
+        }
+    }
+
     private fun formatarDia(d: String): String {
         val p = d.split("-")
         return if (p.size == 3) "${p[2]}/${p[1]}/${p[0]}" else d
@@ -442,8 +510,9 @@ class MainActivity : Activity() {
                 (v.getChildAt(1) as TextView).text = item.titulo
                 val sel = v.getChildAt(2) as TextView
                 val caminhos = item.itens.map { it.arquivo.absolutePath }
-                val todosSel = caminhos.all { it in selecionadas }
-                sel.text = if (todosSel) "☑ Desmarcar" else "☐ Selecionar"
+                val marcadas = caminhos.count { it in selecionadas }
+                val todosSel = marcadas == caminhos.size
+                sel.text = if (todosSel) "●" else if (marcadas > 0) "◐" else "○"
                 sel.setOnClickListener {
                     if (todosSel) selecionadas.removeAll(caminhos.toSet()) else selecionadas.addAll(caminhos)
                     atualizarLista()
@@ -463,7 +532,7 @@ class MainActivity : Activity() {
         l.setGravity(Gravity.CENTER_VERTICAL)
         l.addView(View(this), LinearLayout.LayoutParams(14, MATCH))
         l.addView(TextView(this).apply { textSize = 16f; setPadding(14, 4, 0, 4) }, LinearLayout.LayoutParams(0, WRAP, 1f))
-        l.addView(TextView(this).apply { textSize = 14f; setTextColor(AZUL); setPadding(20, 10, 10, 10) })
+        l.addView(TextView(this).apply { textSize = 24f; setTextColor(AZUL); setPadding(30, 0, 16, 0) })
         return l
     }
 
@@ -478,7 +547,7 @@ class MainActivity : Activity() {
             cel.addView(View(this), FrameLayout.LayoutParams(MATCH, 10, Gravity.BOTTOM))
             val play = TextView(this)
             play.text = "▶"
-            play.textSize = 28f
+            play.textSize = if (colunas <= 4) 28f else 16f
             play.setTextColor(Color.WHITE)
             cel.addView(play, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
             val marca = View(this)
@@ -738,7 +807,7 @@ class MainActivity : Activity() {
     // ---------- Mover / Renomear ----------
     private fun iniciarServico(acao: String, alvo: List<Midia>, destino: File?) {
         if (ServicoOrganizar.rodando) { aviso("Já tem um processo rodando."); return }
-        if (pastaAberta?.absolutePath == pastaDecifrada().absolutePath) { aviso("Na pasta protegida dá só pra ver e excluir. Para tirar as fotos daqui, use Desocultar."); return }
+        if (pastaAberta?.absolutePath == pastaDecifrada().absolutePath) { aviso("Na pasta Protegida dá só pra ver, encaminhar e excluir. Para tirar as fotos daqui, use Desocultar."); return }
         if (alvo.isEmpty()) { aviso("Nada para fazer."); return }
         ServicoOrganizar.fila = alvo
         ServicoOrganizar.acao = acao
@@ -787,6 +856,7 @@ class MainActivity : Activity() {
             "📤  Encaminhar" to { encaminharSelecionadas() },
             "🔒  Especial" to { moverEspecial() },
             "📂  Mover para..." to { moverParaPasta() },
+            "🙈  Mover p/ pasta oculta" to { moverParaOculta() },
             "✏️  Renomear" to { confirmarServico("renomear") },
             "👥  Repetidas" to { menuRepetidas() },
             "♻️  Lixeira" to { abrirLixeira() },
@@ -799,13 +869,53 @@ class MainActivity : Activity() {
         p.show()
     }
 
-    // Botão Especial: manda as selecionadas para DCIM/nudes, renomeando com data + letras
+    // Botão Especial: manda as selecionadas para a pasta Protegida, renomeando com data + letras
     private fun moverEspecial() {
         if (selecionadas.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto)."); return }
         val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
         val pasta = Ferramentas.pastaEspecial()
-        if (pasta == null) { aviso("Não consegui preparar a pasta oculta nudes."); return }
-        confirmar("Mover ${alvo.size} item(ns) para a pasta oculta nudes (protegida por senha), renomeando com data + letras?") { iniciarServico("pasta", alvo, pasta) }
+        if (pasta == null) { aviso("Não consegui preparar a pasta Protegida."); return }
+        confirmar("Mover ${alvo.size} item(ns) para a pasta Protegida (oculta, com senha), renomeando com data + letras?") { iniciarServico("pasta", alvo, pasta) }
+    }
+
+    private fun moverParaOculta() {
+        if (selecionadas.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto)."); return }
+        val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
+        val escolher = {
+            escolherOculta { p ->
+                if (p.absolutePath == pastaAberta?.absolutePath) aviso("Essas fotos já estão nessa pasta.")
+                else confirmar("Mover ${alvo.size} item(ns) para a pasta oculta “${p.name}”, renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
+            }
+        }
+        // Dentro de uma pasta oculta a senha já foi digitada
+        if (pastaAberta != null) escolher() else pedirPin { escolher() }
+    }
+
+    private fun escolherOculta(aoEscolher: (File) -> Unit) {
+        val pastas = Ferramentas.pastasOcultas().map { it.first }
+        val nomes = listOf("➕ Nova pasta oculta") + pastas.map { "🔒 " + it.name }
+        AlertDialog.Builder(this)
+            .setTitle("Mover para a pasta oculta:")
+            .setItems(nomes.toTypedArray()) { _, i -> if (i == 0) novaOculta(aoEscolher) else aoEscolher(pastas[i - 1]) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun novaOculta(depois: (File) -> Unit) {
+        val campo = EditText(this)
+        campo.hint = "nome da pasta"
+        campo.setSingleLine(true)
+        AlertDialog.Builder(this)
+            .setTitle("Nova pasta oculta")
+            .setView(caixa(campo))
+            .setPositiveButton("Criar") { _, _ ->
+                val nome = campo.text.toString().trim()
+                if (nome.isEmpty() || nome.contains("/") || nome.startsWith(".") || nome == "indice.txt") { aviso("Nome inválido."); return@setPositiveButton }
+                val p = Ferramentas.novaOculta(nome)
+                if (p == null) aviso("Não consegui criar a pasta (talvez já exista uma com esse nome).") else depois(p)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun escolherPasta(botao: String, atual: File, aoEscolher: (File) -> Unit) {
@@ -1099,9 +1209,10 @@ class MainActivity : Activity() {
     private fun painelOcultas() {
         val pastas = Ferramentas.pastasOcultas()
         val b = AlertDialog.Builder(this).setTitle("🔒 Pastas ocultas (${pastas.size})")
-        if (pastas.isEmpty()) b.setMessage("Nenhuma pasta oculta ainda.")
-        else b.setItems(pastas.map { (f, o) -> "🔒 ${f.name}\n   era: " + relativo(File(o).parentFile ?: Ferramentas.raiz) }.toTypedArray()) { _, i ->
-            opcoesOculta(pastas[i].first, pastas[i].second)
+        val nomes = listOf("➕ Nova pasta oculta") + pastas.map { (f, o) -> "🔒 ${f.name}\n   era: " + relativo(File(o).parentFile ?: Ferramentas.raiz) }
+        b.setItems(nomes.toTypedArray()) { _, i ->
+            if (i == 0) novaOculta { aviso("Pasta oculta “${it.name}” criada.") }
+            else opcoesOculta(pastas[i - 1].first, pastas[i - 1].second)
         }
         b.setPositiveButton("Esconder outra pasta?") { _, _ -> escolherOcultar() }
             .setNeutralButton("Trocar senha") { _, _ -> criarPin { aviso("Senha trocada.") } }
@@ -1127,11 +1238,11 @@ class MainActivity : Activity() {
     }
 
     // Pasta protegida: abre uma cópia legível só dentro do app, apagada ao sair
-    private fun pastaDecifrada() = File(cacheDir, "cofre/nudes")
+    private fun pastaDecifrada() = File(File(cacheDir, "cofre"), Ferramentas.ESPECIAL)
 
     private fun encDe(f: File): File? =
         if (f.parentFile?.absolutePath == pastaDecifrada().absolutePath)
-            File(File(Ferramentas.cofre, "nudes"), f.name + "." + Ferramentas.EXT) else null
+            File(File(Ferramentas.cofre, Ferramentas.ESPECIAL), f.name + "." + Ferramentas.EXT) else null
 
     private fun abrirEspecial(f: File) {
         info.text = "Abrindo pasta protegida..."

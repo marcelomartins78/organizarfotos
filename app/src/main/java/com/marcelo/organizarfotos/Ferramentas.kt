@@ -176,6 +176,17 @@ object Ferramentas {
         return res.filterNotNull()
     }
 
+    // Ao fechar o app: apaga as pastas vazias do DCIM (de baixo para cima).
+    // A pasta Camera e as pastas de sistema (que começam com ponto) ficam.
+    fun apagarPastasVazias(dir: File = dcim): Int {
+        var n = 0
+        dir.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") }?.forEach { p ->
+            n += apagarPastasVazias(p)
+            if (!p.name.equals("Camera", true) && p.listFiles()?.isEmpty() == true && p.delete()) n++
+        }
+        return n
+    }
+
     fun subpastas(dir: File): List<File> =
         (dir.listFiles() ?: emptyArray()).filter { it.isDirectory && !it.name.startsWith(".") }
             .sortedBy { it.name.lowercase() }
@@ -285,19 +296,48 @@ object Ferramentas {
         return antigos
     }
 
-    fun pastasOcultas(): List<Pair<File, String>> = lerIndice(cofre, indiceCofre)
+    fun pastasOcultas(): List<Pair<File, String>> { trocarNomeEspecial(); return lerIndice(cofre, indiceCofre) }
 
-    // Pasta "nudes" do botão Especial: fica dentro do cofre (oculta e com senha)
+    // Pasta oculta nova, criada direto dentro do cofre (se desocultar, vai para o DCIM)
+    @Synchronized fun novaOculta(nome: String): File? {
+        cofre.mkdirs()
+        val nm = File(cofre, ".nomedia")
+        if (!nm.exists()) nm.createNewFile()
+        val p = File(cofre, nome)
+        if (p.exists() || !p.mkdirs()) return null
+        indiceCofre.appendText(nome + "\t" + File(dcim, nome).absolutePath + "\n")
+        return p
+    }
+
+    // Pasta protegida do botão Especial: fica dentro do cofre (oculta, com senha e criptografada)
+    const val ESPECIAL = "Protegida"
+    private val especial get() = File(cofre, ESPECIAL)
+
+    // A pasta se chamava "nudes"; troca o nome por um discreto, sem mexer nas fotos
+    @Synchronized fun trocarNomeEspecial() {
+        val velha = File(cofre, "nudes")
+        if (!velha.exists() || especial.exists() || !velha.renameTo(especial)) return
+        if (indiceCofre.exists()) indiceCofre.writeText(indiceCofre.readLines().filter { it.isNotBlank() }.joinToString("") { l ->
+            (if (l.substringBefore("\t") == "nudes") ESPECIAL + "\t" + File(dcim, ESPECIAL).absolutePath else l) + "\n"
+        })
+    }
+
     @Synchronized fun pastaEspecial(): File? {
-        val p = File(cofre, "nudes")
+        trocarNomeEspecial()
+        val p = especial
         if (p.exists()) return p
         val velha = File(dcim, "nudes")
-        if (velha.exists()) return if (ocultarPasta(velha) != null) p else null
+        if (velha.exists()) {
+            // Versão antiga: a pasta ficava no DCIM; esconde e troca o nome
+            if (ocultarPasta(velha) == null) return null
+            trocarNomeEspecial()
+            return p.takeIf { it.exists() }
+        }
         cofre.mkdirs()
         val nm = File(cofre, ".nomedia")
         if (!nm.exists()) nm.createNewFile()
         if (!p.mkdirs()) return null
-        indiceCofre.appendText("nudes\t" + velha.absolutePath + "\n")
+        indiceCofre.appendText(ESPECIAL + "\t" + File(dcim, ESPECIAL).absolutePath + "\n")
         return p
     }
 
@@ -317,11 +357,11 @@ object Ferramentas {
         return dest
     }
 
-    // ---------- Criptografia da pasta especial (nudes) ----------
+    // ---------- Criptografia da pasta protegida ----------
     const val EXT = "ofz"
     private var chaveDados: SecretKey? = null
 
-    fun ehEspecial(p: File): Boolean = p.absolutePath == File(cofre, "nudes").absolutePath
+    fun ehEspecial(p: File): Boolean = p.absolutePath == especial.absolutePath
 
     // Chave mestra guardada no chip de segurança do celular (não sai de lá)
     private fun chaveMestra(): SecretKey {
@@ -389,10 +429,10 @@ object Ferramentas {
         }
     }
 
-    // Criptografa o que ainda estiver aberto dentro da pasta nudes
+    // Criptografa o que ainda estiver aberto dentro da pasta protegida
     fun trancarPendentes(): Int {
         var n = 0
-        File(cofre, "nudes").listFiles()?.filter { it.isFile && ehMidia(it) }?.forEach {
+        especial.listFiles()?.filter { it.isFile && ehMidia(it) }?.forEach {
             try { if (criptografar(it, File(it.path + "." + EXT))) n++ } catch (_: Exception) { }
         }
         return n
