@@ -877,9 +877,9 @@ class MainActivity : Activity() {
         if (pasta == null) { aviso("Não consegui preparar a pasta Protegida."); return }
         // Mostra as subpastas da Protegida (e deixa criar uma nova), por isso pede a senha
         val escolher = {
-            escolherPasta("Mover aqui", pasta, { p ->
+            escolherPasta("Mover aqui", pasta, pasta) { p ->
                 confirmar("Mover ${alvo.size} item(ns) para ${tituloOculta(p)} (oculta, com senha), renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
-            }, pasta)
+            }
         }
         if (pastaAberta != null) escolher() else pedirPin { escolher() }
     }
@@ -892,10 +892,10 @@ class MainActivity : Activity() {
         val escolher = {
             escolherOculta { oculta ->
                 // Entra na pasta oculta escolhida: dá para escolher ou criar uma subpasta
-                escolherPasta("Mover aqui", oculta, { p ->
+                escolherPasta("Mover aqui", oculta, oculta) { p ->
                     if (p.absolutePath == pastaAberta?.absolutePath) aviso("Essas fotos já estão nessa pasta.")
                     else confirmar("Mover ${alvo.size} item(ns) para a pasta oculta ${tituloOculta(p)}, renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
-                }, oculta)
+                }
             }
         }
         // Dentro de uma pasta oculta a senha já foi digitada
@@ -930,7 +930,7 @@ class MainActivity : Activity() {
     }
 
     // topo: até onde dá para voltar (o armazenamento todo, ou uma pasta oculta)
-    private fun escolherPasta(botao: String, atual: File, aoEscolher: (File) -> Unit, topo: File = Ferramentas.raiz) {
+    private fun escolherPasta(botao: String, atual: File, topo: File = Ferramentas.raiz, aoEscolher: (File) -> Unit) {
         val subs = Ferramentas.subpastas(atual)
         val ehRaiz = atual.absolutePath == topo.absolutePath
         val nomes = mutableListOf<String>()
@@ -941,11 +941,11 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle(titulo)
             .setItems(nomes.toTypedArray()) { _, i ->
-                if (!ehRaiz && i == 0) escolherPasta(botao, atual.parentFile ?: topo, aoEscolher, topo)
-                else escolherPasta(botao, subs[if (ehRaiz) i else i - 1], aoEscolher, topo)
+                if (!ehRaiz && i == 0) escolherPasta(botao, atual.parentFile ?: topo, topo, aoEscolher)
+                else escolherPasta(botao, subs[if (ehRaiz) i else i - 1], topo, aoEscolher)
             }
             .setPositiveButton(botao) { _, _ -> aoEscolher(atual) }
-            .setNeutralButton("Nova pasta") { _, _ -> novaPasta(atual) { nova -> escolherPasta(botao, nova, aoEscolher, topo) } }
+            .setNeutralButton("Nova pasta") { _, _ -> novaPasta(atual) { nova -> escolherPasta(botao, nova, topo, aoEscolher) } }
             .setNegativeButton("Cancelar", null)
             .show()
     }
