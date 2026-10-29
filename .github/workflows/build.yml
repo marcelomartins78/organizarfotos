@@ -13,6 +13,9 @@ jobs:
         with:
           gradle-version: "8.7"
       - run: gradle assembleDebug
+        env:
+          CHAVE_APK: ${{ secrets.CHAVE_APK }}
+          SENHA_APK: ${{ secrets.SENHA_APK }}
       - uses: actions/upload-artifact@v4
         with:
           name: organizar-fotos-apk

@@ -17,12 +17,20 @@ versionName = "1.0"
 }
 signingConfigs {
 getByName("debug") {
+// A chave e a senha ficam nos segredos do GitHub (CHAVE_APK e SENHA_APK), fora do código
+val chave = System.getenv("CHAVE_APK")
+val senha = System.getenv("SENHA_APK")
+if (!chave.isNullOrBlank() && !senha.isNullOrBlank()) {
 val jks = rootProject.file("chave-gerada.jks")
-jks.writeBytes(Base64.getMimeDecoder().decode(rootProject.file("chave.txt").readText().trim()))
+jks.writeBytes(Base64.getMimeDecoder().decode(chave.trim()))
 storeFile = jks
-storePassword = "organizarfotos"
+storePassword = senha
 keyAlias = "organizar"
-keyPassword = "organizarfotos"
+keyPassword = senha
+} else if (System.getenv("CI") != null) {
+// Sem a chave certa o APK não instala por cima do app atual, então é melhor parar aqui
+throw GradleException("Faltam os segredos CHAVE_APK e SENHA_APK no GitHub (Settings > Secrets and variables > Actions).")
+}
 }
 }
 compileOptions {
