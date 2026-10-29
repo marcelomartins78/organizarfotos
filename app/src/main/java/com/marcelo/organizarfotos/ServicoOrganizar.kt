@@ -21,6 +21,9 @@ class ServicoOrganizar : Service() {
         @Volatile var fila: List<Midia> = emptyList()
         @Volatile var acao = "mover"
         @Volatile var destino: File? = null
+        @Volatile var feitos = 0
+        // Conta quantas vezes o serviço terminou (o app usa para saber quando atualizar a lista)
+        @Volatile var rodadas = 0
     }
 
     private lateinit var nm: NotificationManager
@@ -50,6 +53,7 @@ class ServicoOrganizar : Service() {
                     .setContentTitle("Organizar fotos — concluído")
                     .setContentText(status.replace("\n", " | "))
                     .build())
+                rodadas++
                 rodando = false
                 stopSelf()
             }
@@ -128,6 +132,7 @@ class ServicoOrganizar : Service() {
         }
         if (cripto) try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
         if (caminhos.isNotEmpty()) MediaScannerConnection.scanFile(this, caminhos.toTypedArray(), null, null)
+        feitos = ok
         status = "CONCLUÍDO.\nTotal: $total | Feitos: $ok | Erros: $erros | Pulados: $pulados"
     }
 }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Caminhos que o app pode entregar para outros apps ao encaminhar (pastas ocultas) -->
+<paths>
+    <external-path name="armazenamento" path="." />
+    <cache-path name="temporario" path="compartilhar/" />
+</paths>

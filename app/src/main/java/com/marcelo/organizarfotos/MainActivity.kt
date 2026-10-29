@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.DatePickerDialog
 import android.app.Dialog
+import android.content.ClipData
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -39,10 +40,10 @@ import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.MediaController
 import android.widget.PopupMenu
-import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.VideoView
+import androidx.core.content.FileProvider
 import java.io.File
 import java.security.SecureRandom
 import java.util.Calendar
@@ -50,6 +51,7 @@ import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 
 class MainActivity : Activity() {
 
@@ -76,7 +78,9 @@ class MainActivity : Activity() {
     private val selecionadas = mutableSetOf<String>()
     private var procurando = false
     private var jaProcurou = false
-    private var servicoAtivo = false
+    private var esperando = -1
+    private var automatico = false
+    private var verificandoWhats = false
     private var de: Date? = null
     private var ate: Date? = null
     private var grupos: List<List<Midia>>? = null
@@ -104,13 +108,17 @@ class MainActivity : Activity() {
     private val monitor = object : Runnable {
         override fun run() {
             if (ServicoOrganizar.rodando) {
-                servicoAtivo = true
+                if (esperando < 0) esperando = ServicoOrganizar.rodadas
                 info.text = ServicoOrganizar.status
-            } else if (servicoAtivo) {
-                servicoAtivo = false
+            } else if (esperando >= 0 && ServicoOrganizar.rodadas > esperando) {
+                esperando = -1
                 selecionadas.clear()
                 val l = ServicoOrganizar.log.toString()
-                aviso(ServicoOrganizar.status + (if (l.isNotBlank()) "\n\nDetalhes:\n" + l.take(3000) else ""))
+                if (automatico) {
+                    automatico = false
+                    if (l.isNotBlank()) aviso("Algumas fotos do WhatsApp não foram para a pasta protegida.\n\nDetalhes:\n" + l.take(3000))
+                    else if (ServicoOrganizar.feitos > 0) aviso("🔒 ${ServicoOrganizar.feitos} foto(s)/vídeo(s) do WhatsApp foram para a pasta protegida.")
+                } else aviso(ServicoOrganizar.status + (if (l.isNotBlank()) "\n\nDetalhes:\n" + l.take(3000) else ""))
                 procurar()
             }
             handler.postDelayed(this, 500)
@@ -118,6 +126,7 @@ class MainActivity : Activity() {
     }
 
     private fun prefs(): SharedPreferences = getSharedPreferences("config", MODE_PRIVATE)
+    private fun arquivoDatas() = File(filesDir, "datas.txt")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val tema = prefs().getInt("tema", 0)
@@ -126,6 +135,7 @@ class MainActivity : Activity() {
         setTheme(if (escuro) android.R.style.Theme_DeviceDefault_NoActionBar else android.R.style.Theme_DeviceDefault_Light_NoActionBar)
         super.onCreate(savedInstanceState)
         File(cacheDir, "cofre").deleteRecursively()
+        File(cacheDir, "compartilhar").deleteRecursively()
         lado = (resources.displayMetrics.widthPixels - 32) / colunas
         val tela = LinearLayout(this)
         tela.orientation = LinearLayout.VERTICAL
@@ -212,6 +222,11 @@ class MainActivity : Activity() {
 
         guardadas?.let { todas = it; jaProcurou = true }
         aplicarFiltros()
+        // Mostra na hora as fotos da última vez, enquanto confere o que mudou
+        if (guardadas == null) Thread {
+            val rapida = Ferramentas.lerDatas(arquivoDatas()).map { (c, g) -> Midia(File(c), Date(g.data)) }
+            runOnUiThread { if (rapida.isNotEmpty() && todas.isEmpty() && pastaAberta == null) { todas = rapida; aplicarFiltros() } }
+        }.start()
 
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
@@ -222,7 +237,25 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (!jaProcurou && temAcesso()) procurar()
+        if (!temAcesso()) return
+        if (!verificandoWhats && pastaAberta == null && !ServicoOrganizar.rodando && esperando < 0) protegerWhatsApp()
+        else if (!jaProcurou) procurar()
+    }
+
+    // Toda vez que o app abre, fotos e vídeos do WhatsApp vão direto para a pasta protegida (nudes)
+    private fun protegerWhatsApp() {
+        verificandoWhats = true
+        Thread {
+            val alvo = try { Ferramentas.midiasWhatsApp().map { Midia(it, Ferramentas.dataDe(it)) } } catch (_: Exception) { emptyList() }
+            val pasta = if (alvo.isNotEmpty()) Ferramentas.pastaEspecial() else null
+            runOnUiThread {
+                verificandoWhats = false
+                if (pasta != null && pastaAberta == null && !ServicoOrganizar.rodando && esperando < 0) {
+                    automatico = true
+                    iniciarServico("pasta", alvo, pasta)
+                } else if (!jaProcurou) procurar()
+            }
+        }.start()
     }
 
     // Ao sair do app, as pastas ocultas trancam de novo
@@ -284,7 +317,7 @@ class MainActivity : Activity() {
 
     // ---------- Busca e filtros ----------
     private fun procurar() {
-        if (procurando || ServicoOrganizar.rodando) return
+        if (procurando || ServicoOrganizar.rodando || esperando >= 0) return
         if (!temAcesso()) { pedirAcesso(); return }
         procurando = true
         jaProcurou = true
@@ -294,12 +327,10 @@ class MainActivity : Activity() {
             if (base == null) try { Ferramentas.limparStatus() } catch (_: Exception) { }
             val arquivos = mutableListOf<File>()
             if (base != null) Ferramentas.coletar(base, arquivos) else Ferramentas.raizes().forEach { Ferramentas.coletar(it, arquivos) }
-            val total = arquivos.size
-            val res = ArrayList<Midia>(total)
-            for ((k, f) in arquivos.withIndex()) {
-                if (k % 25 == 0) runOnUiThread { info.text = "Lendo datas: $k de $total" }
-                res.add(Midia(f, Ferramentas.dataDe(f)))
-            }
+            // As datas já lidas ficam guardadas; só as fotos novas precisam ser abertas
+            val salvas = if (base == null) Ferramentas.lerDatas(arquivoDatas()) else HashMap()
+            val res = Ferramentas.comDatas(arquivos, salvas) { k, total -> runOnUiThread { info.text = "Lendo datas das novas: $k de $total" } }
+            if (base == null) Ferramentas.salvarDatas(arquivoDatas(), res)
             runOnUiThread {
                 procurando = false
                 if (base?.absolutePath == pastaAberta?.absolutePath) {
@@ -348,7 +379,7 @@ class MainActivity : Activity() {
 
     private fun atualizarLista() {
         val verdes = todas.count { it.migrada }
-        info.text = "Total: ${todas.size} | Verdes: $verdes | Vermelhas: ${todas.size - verdes}\n" +
+        info.text = (if (pastaAberta != null) "Total: ${todas.size}\n" else "Total: ${todas.size} | Verdes: $verdes | Vermelhas: ${todas.size - verdes}\n") +
             "Mostrando: ${visiveis.size} | Selecionadas: ${selecionadas.size}"
         val g = grupos
         val pa = pastaAberta
@@ -407,7 +438,7 @@ class MainActivity : Activity() {
             val item = linhas[p]
             if (item is Cabecalho) {
                 val v = (convertView as? LinearLayout) ?: novoCabecalho()
-                v.getChildAt(0).setBackgroundColor(if (item.tudoVerde) VERDE else VERMELHO)
+                v.getChildAt(0).setBackgroundColor(if (pastaAberta != null) Color.TRANSPARENT else if (item.tudoVerde) VERDE else VERMELHO)
                 (v.getChildAt(1) as TextView).text = item.titulo
                 val sel = v.getChildAt(2) as TextView
                 val caminhos = item.itens.map { it.arquivo.absolutePath }
@@ -468,6 +499,8 @@ class MainActivity : Activity() {
         cel.visibility = View.VISIBLE
         val caminho = m.arquivo.absolutePath
         val img = cel.getChildAt(0) as ImageView
+        // Dentro da pasta oculta não tem marca de cor
+        cel.getChildAt(1).visibility = if (pastaAberta != null) View.GONE else View.VISIBLE
         cel.getChildAt(1).setBackgroundColor(if (m.migrada) VERDE else VERMELHO)
         cel.getChildAt(2).visibility = if (m.video) View.VISIBLE else View.GONE
         cel.getChildAt(3).visibility = if (caminho in selecionadas) View.VISIBLE else View.GONE
@@ -493,29 +526,55 @@ class MainActivity : Activity() {
         if (!selecionadas.remove(c)) selecionadas.add(c)
         atualizarLista()
     }
-        // ---------- Visualizar (com setinhas) ----------
+    // ---------- Visualizar (tela cheia, arrastar para o lado) ----------
+    // Área da foto: arrastar para o lado troca de foto; um toque mostra ou esconde os botões
+    private inner class AreaArrastar : FrameLayout(this@MainActivity) {
+        var aoArrastar: (Int) -> Unit = {}
+        var aoTocar: () -> Unit = {}
+        private var x0 = 0f
+        private var y0 = 0f
+        private var t0 = 0L
+
+        override fun dispatchTouchEvent(e: MotionEvent): Boolean {
+            super.dispatchTouchEvent(e)
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { x0 = e.x; y0 = e.y; t0 = e.eventTime }
+                MotionEvent.ACTION_UP -> {
+                    val dx = e.x - x0
+                    val dy = e.y - y0
+                    val limite = resources.displayMetrics.density * 60
+                    if (abs(dx) > limite && abs(dx) > abs(dy) * 1.5f) { val lado = if (dx < 0) 1 else -1; post { aoArrastar(lado) } }
+                    else if (abs(dx) < limite / 4 && abs(dy) < limite / 4 && e.eventTime - t0 < 300) post { aoTocar() }
+                }
+            }
+            // Fica com o toque até o fim, mesmo que a foto não use, para perceber o arrastar
+            return true
+        }
+    }
+
     private fun abrir(lista: List<Midia>, inicio: Int, naLixeira: Boolean = false) {
         if (lista.isEmpty()) return
         val itens = lista.toMutableList()
         var pos = inicio.coerceIn(0, itens.size - 1)
         var video: VideoView? = null
         val d = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
-        val tela = LinearLayout(this)
-        tela.orientation = LinearLayout.VERTICAL
+        val tela = FrameLayout(this)
         tela.setBackgroundColor(Color.BLACK)
-        val area = FrameLayout(this)
-        tela.addView(area, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        val area = AreaArrastar()
+        tela.addView(area, FrameLayout.LayoutParams(MATCH, MATCH))
+        val fundo = Color.argb(140, 0, 0, 0)
+
+        // Barra de cima: fechar, contador e menu ⋮
+        val topo = LinearLayout(this)
+        topo.setGravity(Gravity.CENTER_VERTICAL)
+        topo.setBackgroundColor(fundo)
+        topo.setPadding(10, 30, 10, 0)
         val contador = TextView(this)
-        contador.setTextColor(Color.LTGRAY)
-        contador.setPadding(30, 10, 30, 0)
-        tela.addView(contador)
-        val texto = TextView(this)
-        texto.setTextColor(Color.WHITE)
-        texto.textSize = 14f
-        texto.setPadding(30, 10, 30, 10)
-        val rolagem = ScrollView(this)
-        rolagem.addView(texto)
-        tela.addView(rolagem, LinearLayout.LayoutParams(MATCH, (resources.displayMetrics.heightPixels * 0.25).toInt()))
+        contador.setTextColor(Color.WHITE)
+        contador.textSize = 15f
+        contador.setPadding(20, 0, 20, 0)
+        val barraBaixo = LinearLayout(this)
+        barraBaixo.setBackgroundColor(fundo)
 
         fun mostrar() {
             video?.stopPlayback()
@@ -542,42 +601,81 @@ class MainActivity : Activity() {
                     runOnUiThread { if (itens.getOrNull(pos) === m) iv.setImageBitmap(b) }
                 }.start()
             }
-            texto.text = "Carregando informações..."
-            Thread {
-                val s = Ferramentas.informacoes(m)
-                runOnUiThread { if (itens.getOrNull(pos) === m) texto.text = s }
-            }.start()
         }
 
-        val barra = LinearLayout(this)
-        fun botaoBarra(t: String, acao: () -> Unit) {
-            barra.addView(Button(this).apply { text = t; isAllCaps = false; textSize = 20f; setOnClickListener { acao() } },
-                LinearLayout.LayoutParams(0, WRAP, 1f))
+        fun passar(lado: Int) {
+            val n = pos + lado
+            if (n in itens.indices) { pos = n; mostrar() }
         }
-        botaoBarra("◀") { if (pos > 0) { pos--; mostrar() } }
-        botaoBarra("▶") { if (pos < itens.size - 1) { pos++; mostrar() } }
-        if (!naLixeira) {
-            botaoBarra("📤") { encaminhar(listOf(itens[pos])) }
-            botaoBarra("🗑️") {
-                confirmar("Mandar para a lixeira do app?") {
-                    video?.stopPlayback()
-                    video = null
-                    val m = itens[pos]
-                    mandarParaLixeira(listOf(m))
-                    itens.removeAt(pos)
-                    if (itens.isEmpty()) d.dismiss()
-                    else {
-                        if (pos >= itens.size) pos = itens.size - 1
-                        mostrar()
-                    }
+
+        fun excluirAtual() {
+            confirmar("Mandar para a lixeira do app?") {
+                video?.stopPlayback()
+                video = null
+                val m = itens[pos]
+                mandarParaLixeira(listOf(m))
+                itens.removeAt(pos)
+                if (itens.isEmpty()) d.dismiss()
+                else {
+                    if (pos >= itens.size) pos = itens.size - 1
+                    mostrar()
                 }
             }
         }
-        botaoBarra("✖") { d.dismiss() }
-        tela.addView(barra)
+
+        fun detalhes() {
+            val m = itens[pos]
+            Thread {
+                val s = Ferramentas.informacoes(m, !oculto(m.arquivo))
+                runOnUiThread { aviso(s) }
+            }.start()
+        }
+
+        fun botao(t: String, acao: () -> Unit) = Button(this).apply {
+            text = t; isAllCaps = false; textSize = 20f
+            setBackgroundColor(Color.TRANSPARENT); setTextColor(Color.WHITE)
+            setOnClickListener { acao() }
+        }
+
+        topo.addView(botao("✖") { d.dismiss() })
+        topo.addView(contador, LinearLayout.LayoutParams(0, WRAP, 1f))
+        val mais = botao("⋮") { }
+        mais.setOnClickListener {
+            val opcoes = mutableListOf<Pair<String, () -> Unit>>("ℹ️  Detalhes" to { detalhes() })
+            if (!naLixeira) {
+                opcoes.add("📤  Encaminhar" to { encaminhar(listOf(itens[pos])) })
+                opcoes.add("🗑️  Excluir" to { excluirAtual() })
+            }
+            val pm = PopupMenu(this, mais)
+            opcoes.forEachIndexed { i, o -> pm.menu.add(0, i, i, o.first) }
+            pm.setOnMenuItemClickListener { opcoes[it.itemId].second(); true }
+            pm.show()
+        }
+        topo.addView(mais)
+        tela.addView(topo, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP))
+
+        // Barra de baixo: setinhas e os botões mais usados
+        fun botaoBaixo(t: String, acao: () -> Unit) = barraBaixo.addView(botao(t, acao), LinearLayout.LayoutParams(0, WRAP, 1f))
+        botaoBaixo("◀") { passar(-1) }
+        if (!naLixeira) {
+            botaoBaixo("📤") { encaminhar(listOf(itens[pos])) }
+            botaoBaixo("🗑️") { excluirAtual() }
+        }
+        botaoBaixo("▶") { passar(1) }
+        tela.addView(barraBaixo, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM))
+
+        area.aoArrastar = { passar(it) }
+        area.aoTocar = {
+            val v = if (topo.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            topo.visibility = v
+            barraBaixo.visibility = v
+        }
         d.setOnDismissListener { video?.stopPlayback() }
         mostrar()
         d.setContentView(tela)
+        @Suppress("DEPRECATION")
+        d.window?.decorView?.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         d.show()
     }
 
@@ -587,19 +685,43 @@ class MainActivity : Activity() {
         encaminhar(todas.filter { it.arquivo.absolutePath in selecionadas })
     }
 
+    // Itens das pastas ocultas (ou da cópia aberta da pasta protegida)
+    private fun oculto(f: File): Boolean {
+        val c = f.absolutePath
+        return c.startsWith(Ferramentas.cofre.absolutePath + "/") || c.startsWith(cacheDir.absolutePath + "/")
+    }
+
+    // A Galeria não enxerga as pastas ocultas, então o app entrega o arquivo direto para o outro app
+    private fun uriOculto(f: File): Uri? = try {
+        val arq = if (f.absolutePath.startsWith(cacheDir.absolutePath + "/")) {
+            // A cópia aberta da pasta protegida some ao sair do app; usa uma cópia própria para encaminhar
+            val c = File(File(cacheDir, "compartilhar"), f.name)
+            c.parentFile?.mkdirs()
+            f.copyTo(c, overwrite = true)
+        } else f
+        FileProvider.getUriForFile(this, "$packageName.arquivos", arq)
+    } catch (_: Exception) { null }
+
     private fun encaminhar(itens: List<Midia>) {
         if (itens.isEmpty()) return
-        val uris = ConcurrentHashMap<String, Uri>()
-        val faltam = AtomicInteger(itens.size)
-        val caminhos = itens.map { it.arquivo.absolutePath }.toTypedArray()
-        MediaScannerConnection.scanFile(this, caminhos, null) { path, uri ->
-            if (uri != null) uris[path] = uri
-            if (faltam.decrementAndGet() == 0) runOnUiThread { compartilhar(itens, caminhos.mapNotNull { uris[it] }) }
-        }
+        val (ocultos, normais) = itens.partition { oculto(it.arquivo) }
+        Thread {
+            val urisOcultos = ocultos.mapNotNull { uriOculto(it.arquivo) }
+            runOnUiThread {
+                if (normais.isEmpty()) { compartilhar(itens, urisOcultos); return@runOnUiThread }
+                val uris = ConcurrentHashMap<String, Uri>()
+                val faltam = AtomicInteger(normais.size)
+                val caminhos = normais.map { it.arquivo.absolutePath }.toTypedArray()
+                MediaScannerConnection.scanFile(this, caminhos, null) { path, uri ->
+                    if (uri != null) uris[path] = uri
+                    if (faltam.decrementAndGet() == 0) runOnUiThread { compartilhar(itens, caminhos.mapNotNull { uris[it] } + urisOcultos) }
+                }
+            }
+        }.start()
     }
 
     private fun compartilhar(itens: List<Midia>, lista: List<Uri>) {
-        if (lista.isEmpty()) { aviso("Não consegui preparar para encaminhar. Itens de pastas ocultas não podem ser encaminhados."); return }
+        if (lista.isEmpty()) { aviso("Não consegui preparar para encaminhar."); return }
         val tipo = when {
             itens.all { it.video } -> "video/*"
             itens.none { it.video } -> "image/*"
@@ -608,6 +730,7 @@ class MainActivity : Activity() {
         val i = if (lista.size == 1) Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, lista[0])
             else Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(lista))
         i.type = tipo
+        i.clipData = ClipData.newRawUri("", lista[0]).apply { lista.drop(1).forEach { addItem(ClipData.Item(it)) } }
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         startActivity(Intent.createChooser(i, "Encaminhar para"))
     }
@@ -620,6 +743,7 @@ class MainActivity : Activity() {
         ServicoOrganizar.fila = alvo
         ServicoOrganizar.acao = acao
         ServicoOrganizar.destino = destino
+        esperando = ServicoOrganizar.rodadas
         startForegroundService(Intent(this, ServicoOrganizar::class.java))
     }
 

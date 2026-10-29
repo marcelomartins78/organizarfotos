@@ -28,6 +28,9 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class Midia(val arquivo: File, val data: Date) {
     val video = arquivo.extension.lowercase() in Ferramentas.videos
@@ -39,6 +42,8 @@ class Cabecalho(val titulo: String, val itens: List<Midia>) {
 }
 
 class Linha(val itens: List<Midia>)
+
+class Guardada(val mod: Long, val tam: Long, val data: Long)
 
 object Ferramentas {
     val fotos = setOf("jpg", "jpeg", "png", "heic", "heif", "webp", "gif")
@@ -104,6 +109,71 @@ object Ferramentas {
             }
         }
         return n
+    }
+
+    // Fotos e vídeos do WhatsApp (normal, Business e Dual Apps), sem os Status.
+    // Pula o que mudou no último minuto, que pode estar ainda baixando.
+    fun midiasWhatsApp(): List<File> {
+        val lista = mutableListOf<File>()
+        for (r in raizes()) {
+            val bases = listOf("Android/media/com.whatsapp/WhatsApp/Media", "Android/media/com.whatsapp.w4b/WhatsApp Business/Media", "WhatsApp/Media")
+            for (b in bases) File(r, b).listFiles()?.filter {
+                it.isDirectory && !it.name.startsWith(".") &&
+                    (it.name.endsWith("Images") || it.name.endsWith("Video") || it.name.endsWith("Gifs"))
+            }?.forEach { coletar(it, lista) }
+        }
+        val agora = System.currentTimeMillis()
+        return lista.filter { agora - it.lastModified() > 60_000 }
+    }
+
+    // ---------- Datas guardadas (para abrir rápido) ----------
+    // Guarda a data de cada arquivo; na próxima vez só lê as datas de arquivos novos ou alterados
+    fun lerDatas(arq: File): HashMap<String, Guardada> {
+        val m = HashMap<String, Guardada>()
+        try {
+            if (arq.exists()) arq.forEachLine { l ->
+                val p = l.split("\t")
+                if (p.size == 4) {
+                    val mod = p[1].toLongOrNull()
+                    val tam = p[2].toLongOrNull()
+                    val d = p[3].toLongOrNull()
+                    if (mod != null && tam != null && d != null) m[p[0]] = Guardada(mod, tam, d)
+                }
+            }
+        } catch (_: Exception) { }
+        return m
+    }
+
+    fun salvarDatas(arq: File, lista: List<Midia>) {
+        try {
+            val tmp = File(arq.path + ".tmp")
+            tmp.bufferedWriter().use { w ->
+                lista.forEach { m -> val f = m.arquivo; w.write("${f.absolutePath}\t${f.lastModified()}\t${f.length()}\t${m.data.time}\n") }
+            }
+            tmp.renameTo(arq)
+        } catch (_: Exception) { }
+    }
+
+    // Monta a lista com as datas guardadas; as que faltam são lidas em paralelo
+    fun comDatas(arquivos: List<File>, guardadas: Map<String, Guardada>, progresso: (Int, Int) -> Unit): List<Midia> {
+        val res = arrayOfNulls<Midia>(arquivos.size)
+        val novos = ArrayList<Int>()
+        for ((i, f) in arquivos.withIndex()) {
+            val g = guardadas[f.absolutePath]
+            if (g != null && g.mod == f.lastModified() && g.tam == f.length()) res[i] = Midia(f, Date(g.data)) else novos.add(i)
+        }
+        if (novos.isNotEmpty()) {
+            val pool = Executors.newFixedThreadPool(4)
+            val feitos = AtomicInteger()
+            for (i in novos) pool.execute {
+                res[i] = Midia(arquivos[i], dataDe(arquivos[i]))
+                val n = feitos.incrementAndGet()
+                if (n % 25 == 0) progresso(n, novos.size)
+            }
+            pool.shutdown()
+            pool.awaitTermination(1, TimeUnit.DAYS)
+        }
+        return res.filterNotNull()
     }
 
     fun subpastas(dir: File): List<File> =
@@ -424,14 +494,14 @@ object Ferramentas {
     fun tamanho(b: Long): String =
         if (b < 1048576) "${b / 1024} KB" else String.format(Locale.US, "%.1f MB", b / 1048576.0)
 
-    fun informacoes(m: Midia): String {
+    fun informacoes(m: Midia, cores: Boolean = true): String {
         val f = m.arquivo
         val sb = StringBuilder()
         sb.append("Nome: ${f.name}\n")
         sb.append("Pasta: ${f.parent ?: ""}\n")
         sb.append("Tamanho: ${tamanho(f.length())}\n")
         sb.append("Data e hora: ${dataHora(m.data)}\n")
-        sb.append("Situação: " + (if (m.migrada) "organizada (verde)" else "ainda não migrada (vermelho)") + "\n")
+        if (cores) sb.append("Situação: " + (if (m.migrada) "organizada (verde)" else "ainda não migrada (vermelho)") + "\n")
         try {
             if (m.video) {
                 val r = MediaMetadataRetriever()

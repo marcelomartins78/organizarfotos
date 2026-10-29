@@ -28,8 +28,10 @@ storePassword = senha
 keyAlias = "organizar"
 keyPassword = senha
 } else if (System.getenv("CI") != null) {
-// Sem a chave certa o APK não instala por cima do app atual, então é melhor parar aqui
-throw GradleException("Faltam os segredos CHAVE_APK e SENHA_APK no GitHub (Settings > Secrets and variables > Actions).")
+// Sem a chave certa o APK não instala por cima do app atual: compila (para achar erros), mas não monta o APK
+tasks.configureEach {
+if (name == "packageDebug") doFirst { throw GradleException("Faltam os segredos CHAVE_APK e SENHA_APK no GitHub (Settings > Secrets and variables > Actions).") }
+}
 }
 }
 }
@@ -42,4 +44,5 @@ kotlinOptions { jvmTarget = "17" }
 
 dependencies {
 implementation("androidx.exifinterface:exifinterface:1.3.7")
+implementation("androidx.core:core:1.12.0")
 }
