@@ -296,6 +296,19 @@ object Ferramentas {
         return antigos
     }
 
+    // Move uma pasta comum (com tudo dentro) para dentro de uma pasta privada.
+    // Devolve a pasta no lugar novo e os caminhos antigos das fotos (para sumirem da Galeria).
+    @Synchronized fun moverPastaPara(dir: File, destino: File): Pair<File, List<String>>? {
+        val antigos = dir.walkTopDown().filter { it.isFile && ehMidia(it) }.map { it.absolutePath }.toList()
+        var nome = dir.name
+        var n = 1
+        while (File(destino, nome).exists()) { nome = "${dir.name}_$n"; n++ }
+        val novo = File(destino, nome)
+        destino.mkdirs()
+        if (!dir.renameTo(novo)) return null
+        return novo to antigos
+    }
+
     fun pastasOcultas(): List<Pair<File, String>> { trocarNomeEspecial(); return lerIndice(cofre, indiceCofre) }
 
     // Pasta oculta nova, criada direto dentro do cofre (se desocultar, vai para o DCIM)
