@@ -362,6 +362,8 @@ object Ferramentas {
     private var chaveDados: SecretKey? = null
 
     fun ehEspecial(p: File): Boolean = p.absolutePath == especial.absolutePath
+    // A pasta Protegida ou uma subpasta dela (tudo ali dentro fica criptografado)
+    fun dentroEspecial(p: File): Boolean = ehEspecial(p) || p.absolutePath.startsWith(especial.absolutePath + "/")
 
     // Chave mestra guardada no chip de segurança do celular (não sai de lá)
     private fun chaveMestra(): SecretKey {
@@ -432,7 +434,7 @@ object Ferramentas {
     // Criptografa o que ainda estiver aberto dentro da pasta protegida
     fun trancarPendentes(): Int {
         var n = 0
-        especial.listFiles()?.filter { it.isFile && ehMidia(it) }?.forEach {
+        especial.walkTopDown().filter { it.isFile && ehMidia(it) }.toList().forEach {
             try { if (criptografar(it, File(it.path + "." + EXT))) n++ } catch (_: Exception) { }
         }
         return n

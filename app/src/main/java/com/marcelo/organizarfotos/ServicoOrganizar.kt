@@ -76,7 +76,7 @@ class ServicoOrganizar : Service() {
     private fun processar() {
         val tipo = acao
         val pastaDestino = destino
-        val cripto = tipo == "pasta" && pastaDestino != null && Ferramentas.ehEspecial(pastaDestino)
+        val cripto = tipo == "pasta" && pastaDestino != null && Ferramentas.dentroEspecial(pastaDestino)
         val verbo = if (tipo == "renomear") "Renomeando" else if (cripto) "Protegendo" else "Movendo"
         val lista = fila.sortedBy { it.data }
         val total = lista.size

@@ -875,16 +875,27 @@ class MainActivity : Activity() {
         val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
         val pasta = Ferramentas.pastaEspecial()
         if (pasta == null) { aviso("Não consegui preparar a pasta Protegida."); return }
-        confirmar("Mover ${alvo.size} item(ns) para a pasta Protegida (oculta, com senha), renomeando com data + letras?") { iniciarServico("pasta", alvo, pasta) }
+        // Mostra as subpastas da Protegida (e deixa criar uma nova), por isso pede a senha
+        val escolher = {
+            escolherPasta("Mover aqui", pasta, { p ->
+                confirmar("Mover ${alvo.size} item(ns) para ${tituloOculta(p)} (oculta, com senha), renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
+            }, pasta)
+        }
+        if (pastaAberta != null) escolher() else pedirPin { escolher() }
     }
+
+    private fun tituloOculta(p: File): String = "“" + p.absolutePath.removePrefix(Ferramentas.cofre.absolutePath + "/") + "”"
 
     private fun moverParaOculta() {
         if (selecionadas.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto)."); return }
         val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
         val escolher = {
-            escolherOculta { p ->
-                if (p.absolutePath == pastaAberta?.absolutePath) aviso("Essas fotos já estão nessa pasta.")
-                else confirmar("Mover ${alvo.size} item(ns) para a pasta oculta “${p.name}”, renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
+            escolherOculta { oculta ->
+                // Entra na pasta oculta escolhida: dá para escolher ou criar uma subpasta
+                escolherPasta("Mover aqui", oculta, { p ->
+                    if (p.absolutePath == pastaAberta?.absolutePath) aviso("Essas fotos já estão nessa pasta.")
+                    else confirmar("Mover ${alvo.size} item(ns) para a pasta oculta ${tituloOculta(p)}, renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
+                }, oculta)
             }
         }
         // Dentro de uma pasta oculta a senha já foi digitada
@@ -918,20 +929,23 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun escolherPasta(botao: String, atual: File, aoEscolher: (File) -> Unit) {
+    // topo: até onde dá para voltar (o armazenamento todo, ou uma pasta oculta)
+    private fun escolherPasta(botao: String, atual: File, aoEscolher: (File) -> Unit, topo: File = Ferramentas.raiz) {
         val subs = Ferramentas.subpastas(atual)
-        val ehRaiz = atual.absolutePath == Ferramentas.raiz.absolutePath
+        val ehRaiz = atual.absolutePath == topo.absolutePath
         val nomes = mutableListOf<String>()
         if (!ehRaiz) nomes.add("⬆ Voltar")
         subs.forEach { nomes.add("📁 " + it.name) }
+        val cofre = Ferramentas.cofre.absolutePath
+        val titulo = if (atual.absolutePath.startsWith("$cofre/")) "🔒 " + atual.absolutePath.removePrefix("$cofre/") else "📂 " + relativo(atual)
         AlertDialog.Builder(this)
-            .setTitle("📂 " + relativo(atual))
+            .setTitle(titulo)
             .setItems(nomes.toTypedArray()) { _, i ->
-                if (!ehRaiz && i == 0) escolherPasta(botao, atual.parentFile ?: Ferramentas.raiz, aoEscolher)
-                else escolherPasta(botao, subs[if (ehRaiz) i else i - 1], aoEscolher)
+                if (!ehRaiz && i == 0) escolherPasta(botao, atual.parentFile ?: topo, aoEscolher, topo)
+                else escolherPasta(botao, subs[if (ehRaiz) i else i - 1], aoEscolher, topo)
             }
             .setPositiveButton(botao) { _, _ -> aoEscolher(atual) }
-            .setNeutralButton("Nova pasta") { _, _ -> novaPasta(atual) { nova -> escolherPasta(botao, nova, aoEscolher) } }
+            .setNeutralButton("Nova pasta") { _, _ -> novaPasta(atual) { nova -> escolherPasta(botao, nova, aoEscolher, topo) } }
             .setNegativeButton("Cancelar", null)
             .show()
     }
@@ -1240,9 +1254,10 @@ class MainActivity : Activity() {
     // Pasta protegida: abre uma cópia legível só dentro do app, apagada ao sair
     private fun pastaDecifrada() = File(File(cacheDir, "cofre"), Ferramentas.ESPECIAL)
 
+    // Da cópia aberta para o arquivo criptografado de verdade (também nas subpastas)
     private fun encDe(f: File): File? =
-        if (f.parentFile?.absolutePath == pastaDecifrada().absolutePath)
-            File(File(Ferramentas.cofre, Ferramentas.ESPECIAL), f.name + "." + Ferramentas.EXT) else null
+        if (f.absolutePath.startsWith(pastaDecifrada().absolutePath + "/"))
+            File(File(Ferramentas.cofre, Ferramentas.ESPECIAL), f.relativeTo(pastaDecifrada()).path + "." + Ferramentas.EXT) else null
 
     private fun abrirEspecial(f: File) {
         info.text = "Abrindo pasta protegida..."
@@ -1252,10 +1267,12 @@ class MainActivity : Activity() {
             alvo.deleteRecursively()
             alvo.mkdirs()
             try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
-            val abertas = f.listFiles()?.count { it.isFile && Ferramentas.ehMidia(it) } ?: 0
-            val protegidas = f.listFiles()?.count { it.isFile && it.extension == Ferramentas.EXT } ?: 0
-            f.listFiles()?.filter { it.isFile && it.extension == Ferramentas.EXT }?.forEach { e ->
-                val normal = File(alvo, e.nameWithoutExtension)
+            // Inclui as subpastas, mantendo a mesma arrumação na cópia aberta
+            val arquivos = f.walkTopDown().filter { it.isFile }.toList()
+            val abertas = arquivos.count { Ferramentas.ehMidia(it) }
+            val protegidas = arquivos.filter { it.extension == Ferramentas.EXT }
+            protegidas.forEach { e ->
+                val normal = File(alvo, e.relativeTo(f).path.removeSuffix("." + Ferramentas.EXT))
                 try { Ferramentas.descriptografar(e, normal) } catch (_: Exception) { normal.delete(); falhas++ }
             }
             runOnUiThread {
@@ -1264,7 +1281,7 @@ class MainActivity : Activity() {
                 pastaAberta = alvo
                 procurar()
                 if (falhas > 0) aviso("$falhas arquivo(s) não puderam ser abertos.")
-                else if (protegidas == 0 && abertas == 0) aviso("A pasta protegida está vazia.")
+                else if (protegidas.isEmpty() && abertas == 0) aviso("A pasta protegida está vazia.")
                 else if (abertas > 0) aviso("$abertas arquivo(s) ainda não foram protegidos. Eles continuam guardados na pasta, sem perder nada.")
             }
         }.start()
