@@ -1390,6 +1390,7 @@ class MainActivity : Activity() {
         val sel = { todas.filter { it.arquivo.absolutePath in selecionadas } }
         return listOf(
             "📤  Encaminhar" to { encaminharSelecionadas() },
+            "📁  Mover para pasta" to { moverNoCofre(sel()) },
             "🔓  Devolver p/ galeria" to { devolverParaGaleria(sel()) },
             "➕  Nova pasta" to { pastaAberta?.let { pa -> novaPasta(pa) { procurar() } } },
             "📥  Mandar uma pasta pro cofre" to { Ferramentas.pastaEspecial()?.let { mandarPastaProCofre(it) } },
@@ -1397,6 +1398,40 @@ class MainActivity : Activity() {
             "⚠️  Devolver tudo para a galeria" to { devolverTudo() },
             "❎  Limpar seleção" to { selecionadas.clear(); atualizarLista() }
         )
+    }
+
+    // Muda as fotos selecionadas de pasta dentro do cofre (continuam criptografadas)
+    private fun moverNoCofre(alvo: List<Midia>) {
+        val itens = alvo.filter { Ferramentas.criptografado(it.arquivo) }
+        if (itens.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto)."); return }
+        escolherPastaDoCofre { destino ->
+            confirmar("Mover ${itens.size} item(ns) para ${tituloCofre(destino)}?") {
+                Thread {
+                    var falhas = 0
+                    for (m in itens) if (!(try { Ferramentas.moverNoCofre(m.arquivo, destino) } catch (_: Exception) { false })) falhas++
+                    runOnUiThread {
+                        selecionadas.clear()
+                        procurar()
+                        aviso("Movidos: ${itens.size - falhas}" + (if (falhas > 0) "\nNão consegui: $falhas" else ""))
+                    }
+                }.start()
+            }
+        }
+    }
+
+    // Lista todas as pastas do cofre (Recentes primeiro) e deixa criar uma nova
+    private fun escolherPastaDoCofre(aoEscolher: (File) -> Unit) {
+        val raiz = cofreRaiz()
+        val atual = pastaAberta?.absolutePath
+        val pastas = raiz.walkTopDown().filter { it.isDirectory && it != raiz && !it.name.startsWith(".") && it.absolutePath != atual }
+            .sortedWith(compareBy({ it.absolutePath != File(raiz, Ferramentas.RECENTES).absolutePath }, { it.relativeTo(raiz).path.lowercase() }))
+            .toList()
+        val nomes = listOf("➕ Nova pasta") + pastas.map { "📁 " + it.relativeTo(raiz).path.replace("/", " › ") }
+        AlertDialog.Builder(this)
+            .setTitle("Mover para a pasta:")
+            .setItems(nomes.toTypedArray()) { _, i -> if (i == 0) novaPasta(raiz) { aoEscolher(it) } else aoEscolher(pastas[i - 1]) }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     // Tira tudo do cofre (descriptografado): pede a senha de novo antes

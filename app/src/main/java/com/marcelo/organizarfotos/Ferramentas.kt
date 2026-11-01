@@ -546,6 +546,17 @@ object Ferramentas {
             PastaCofre(p, arqs.maxByOrNull { it.lastModified() }, arqs.size)
         }.sortedWith(compareBy({ !(it.pasta.name == RECENTES && ehEspecial(dir)) }, { it.pasta.name.lowercase() }))
 
+    // Muda um arquivo criptografado de pasta dentro do cofre (continua criptografado)
+    @Synchronized fun moverNoCofre(f: File, destino: File): Boolean {
+        if (!criptografado(f) || !dentroEspecial(destino)) return false
+        destino.mkdirs()
+        val real = File(nomeReal(f))
+        var dest = File(destino, f.name)
+        var n = 1
+        while (dest.exists()) { dest = File(destino, "${real.nameWithoutExtension}_$n.${real.extension}.$EXT"); n++ }
+        return f.renameTo(dest)
+    }
+
     // Arquivos soltos na raiz do cofre vão para Recentes (continuam criptografados, só mudam de pasta)
     @Synchronized fun soltosParaRecentes(): Int {
         val raizCofre = especial
