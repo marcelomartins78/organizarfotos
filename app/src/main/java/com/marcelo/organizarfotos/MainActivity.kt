@@ -1406,7 +1406,10 @@ class MainActivity : Activity() {
     // Menu ⋮ dentro do cofre
     private fun opcoesDoCofre(): List<Pair<String, () -> Unit>> {
         val sel = { todas.filter { it.arquivo.absolutePath in selecionadas } }
-        return listOf(
+        val pa = pastaAberta
+        // Dentro de uma pasta (que não seja a tela principal do cofre nem a Recentes): mover a própria pasta
+        val podeMoverPasta = pa != null && !Ferramentas.ehEspecial(pa) && pa.absolutePath != File(cofreRaiz(), Ferramentas.RECENTES).absolutePath
+        return (if (podeMoverPasta) listOf<Pair<String, () -> Unit>>("📁  Mover esta pasta" to { moverPastaDoCofre(pa!!) }) else emptyList()) + listOf(
             "📤  Encaminhar" to { encaminharSelecionadas() },
             "📁  Mover para pasta" to { moverNoCofre(sel()) },
             "🔓  Devolver p/ galeria" to { devolverParaGaleria(sel()) },
@@ -1499,7 +1502,8 @@ class MainActivity : Activity() {
                 Thread {
                     val r = try { Ferramentas.moverPastaNoCofre(pasta, destino) } catch (_: Exception) { null }
                     runOnUiThread {
-                        procurar()
+                        // Se a pasta movida é a que está aberta, a tela acompanha ela no lugar novo
+                        if (r != null && pastaAberta?.absolutePath == pasta.absolutePath) abrirPastaDoCofre(r) else procurar()
                         if (r == null) aviso("Não consegui mover a pasta.")
                     }
                 }.start()
