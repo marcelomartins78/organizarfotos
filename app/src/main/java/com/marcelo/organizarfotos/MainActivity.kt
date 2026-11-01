@@ -255,6 +255,10 @@ class MainActivity : Activity() {
     private fun protegerWhatsApp() {
         verificandoWhats = true
         Thread {
+            // Garante que nada fica sem criptografia: DCIM/nudes antiga e fotos soltas dentro da Protegida
+            val recolhidas = try { Ferramentas.recolherNudesAntiga() } catch (_: Exception) { emptyList() }
+            if (recolhidas.isNotEmpty()) MediaScannerConnection.scanFile(this@MainActivity, recolhidas.toTypedArray(), null, null)
+            try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
             val alvo = try { Ferramentas.midiasWhatsApp().map { Midia(it, Ferramentas.dataDe(it)) } } catch (_: Exception) { emptyList() }
             val pasta = if (alvo.isNotEmpty()) Ferramentas.pastaEspecial() else null
             runOnUiThread {
@@ -1294,6 +1298,12 @@ class MainActivity : Activity() {
                     selecionadas.clear()
                     pastaAberta = f
                     procurar()
+                } else if (Ferramentas.ehEspecial(f)) {
+                    // A Protegida sai descriptografada: pede a senha de novo antes
+                    pedirPin {
+                        confirmar("Desocultar a pasta Protegida? Todas as fotos dela serão DESCRIPTOGRAFADAS e voltam para " +
+                            relativo(File(original).parentFile ?: Ferramentas.raiz) + ", aparecendo de novo na Galeria.") { desocultar(f, original) }
+                    }
                 } else confirmar("Desocultar “${f.name}”? Ela volta para " + relativo(File(original).parentFile ?: Ferramentas.raiz) + " e aparece de novo na Galeria.") {
                     desocultar(f, original)
                 }

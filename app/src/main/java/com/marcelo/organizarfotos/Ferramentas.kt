@@ -453,6 +453,27 @@ object Ferramentas {
         return n
     }
 
+    // Fotos que ficaram em DCIM/nudes (versão antiga do app ou Desocultar antigo):
+    // voltam criptografadas para a pasta Protegida. Devolve os caminhos antigos (para sumirem da Galeria).
+    @Synchronized fun recolherNudesAntiga(): List<String> {
+        val velha = File(dcim, "nudes")
+        if (!velha.isDirectory) return emptyList()
+        val antes = velha.walkTopDown().filter { it.isFile && ehMidia(it) }.map { it.absolutePath }.toList()
+        val p = pastaEspecial() ?: return emptyList()
+        if (!velha.exists()) return antes   // a pasta inteira foi para a Protegida; trancarPendentes criptografa
+        val feitos = mutableListOf<String>()
+        velha.walkTopDown().filter { it.isFile && ehMidia(it) }.toList().forEach { f ->
+            val base = File(p, f.relativeTo(velha).path)
+            var dest = File(base.path + "." + EXT)
+            var n = 1
+            while (dest.exists()) { dest = File(base.parentFile, "${base.nameWithoutExtension}_$n.${base.extension}.$EXT"); n++ }
+            try { if (criptografar(f, dest)) feitos.add(f.absolutePath) } catch (_: Exception) { }
+        }
+        // Apaga as pastas que ficaram vazias
+        velha.walkBottomUp().filter { it.isDirectory }.forEach { if (it.listFiles()?.isEmpty() == true) it.delete() }
+        return feitos
+    }
+
     // ---------- Senha e repetidas ----------
     private fun hex(b: ByteArray): String = b.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
 
