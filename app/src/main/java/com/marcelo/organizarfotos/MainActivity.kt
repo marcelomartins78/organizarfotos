@@ -125,8 +125,8 @@ class MainActivity : Activity() {
                 val l = ServicoOrganizar.log.toString()
                 if (automatico) {
                     automatico = false
-                    if (l.isNotBlank()) aviso("Algumas fotos do WhatsApp não foram para a pasta protegida.\n\nDetalhes:\n" + l.take(3000))
-                    else if (ServicoOrganizar.feitos > 0) aviso("🔒 ${ServicoOrganizar.feitos} foto(s)/vídeo(s) do WhatsApp foram para a pasta protegida.")
+                    if (l.isNotBlank()) aviso("Algumas fotos do WhatsApp não foram para o cofre.\n\nDetalhes:\n" + l.take(3000))
+                    else if (ServicoOrganizar.feitos > 0) aviso("🔒 ${ServicoOrganizar.feitos} foto(s) do WhatsApp que pareciam nudes foram para Cofre › WhatsApp.\n\nSe alguma não for, abra o cofre, selecione e use \"Devolver p/ galeria\".")
                 } else aviso(ServicoOrganizar.status + (if (l.isNotBlank()) "\n\nDetalhes:\n" + l.take(3000) else ""))
                 procurar()
             }
@@ -265,9 +265,22 @@ class MainActivity : Activity() {
             val recolhidas = try { Ferramentas.recolherNudesAntiga() } catch (_: Exception) { emptyList() }
             if (recolhidas.isNotEmpty()) MediaScannerConnection.scanFile(this@MainActivity, recolhidas.toTypedArray(), null, null)
             try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
-            // Envio automático do WhatsApp desligado: estava levando fotos que não deviam ir
-            val alvo = emptyList<Midia>()
-            val pasta = if (alvo.isNotEmpty()) Ferramentas.pastaEspecial() else null
+            // Fotos recebidas no WhatsApp que parecem nudes vão sozinhas para Cofre › WhatsApp.
+            // Cada foto é analisada uma vez só (a lista das já vistas fica guardada).
+            val vistas = File(filesDir, "whatsapp_vistas.txt")
+            val alvo = try {
+                val ja = if (vistas.exists()) vistas.readLines().filter { it.isNotBlank() }.toHashSet() else HashSet()
+                val novas = Ferramentas.fotosRecebidasWhatsApp().filter { it.absolutePath !in ja }
+                val nudes = mutableListOf<Midia>()
+                for ((k, f) in novas.withIndex()) {
+                    if (k % 20 == 0) runOnUiThread { info.text = "Procurando nudes no WhatsApp: $k de ${novas.size}" }
+                    val nude = try { Ferramentas.pareceNude(f) } catch (_: Exception) { false }
+                    if (nude) nudes.add(Midia(f, Ferramentas.dataDe(f))) else ja.add(f.absolutePath)
+                }
+                if (novas.isNotEmpty()) vistas.writeText(ja.joinToString("\n"))
+                nudes
+            } catch (_: Exception) { emptyList() }
+            val pasta = if (alvo.isNotEmpty()) Ferramentas.pastaEspecial()?.let { File(it, "WhatsApp").apply { mkdirs() } } else null
             runOnUiThread {
                 verificandoWhats = false
                 if (pasta != null && pastaAberta == null && !ServicoOrganizar.rodando && esperando < 0) {

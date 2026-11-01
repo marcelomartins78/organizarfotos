@@ -35,6 +35,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 
 class Midia(val arquivo: File, val data: Date) {
     // No cofre o arquivo é "foto.jpg.ofz": o tipo vem da extensão de dentro
@@ -119,19 +120,44 @@ object Ferramentas {
         return n
     }
 
-    // Fotos e vídeos do WhatsApp (normal, Business e Dual Apps), sem os Status.
-    // Pula o que mudou no último minuto, que pode estar ainda baixando.
-    fun midiasWhatsApp(): List<File> {
+    // Fotos RECEBIDAS no WhatsApp (sem as enviadas, sem vídeos e sem GIFs), para o detector de nudes
+    fun fotosRecebidasWhatsApp(): List<File> {
         val lista = mutableListOf<File>()
         for (r in raizes()) {
             val bases = listOf("Android/media/com.whatsapp/WhatsApp/Media", "Android/media/com.whatsapp.w4b/WhatsApp Business/Media", "WhatsApp/Media")
-            for (b in bases) File(r, b).listFiles()?.filter {
-                it.isDirectory && !it.name.startsWith(".") &&
-                    (it.name.endsWith("Images") || it.name.endsWith("Video") || it.name.endsWith("Gifs"))
-            }?.forEach { coletar(it, lista) }
+            for (b in bases) File(r, b).listFiles()?.filter { it.isDirectory && it.name.endsWith("Images") }?.forEach { coletar(it, lista) }
         }
         val agora = System.currentTimeMillis()
-        return lista.filter { agora - it.lastModified() > 60_000 }
+        return lista.filter {
+            it.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp", "heic", "heif") &&
+                !it.absolutePath.contains("/Sent/") && agora - it.lastModified() > 60_000
+        }
+    }
+
+    // ---------- Detector de nudes (pela cor de pele) ----------
+    // Simples: mede quanto da foto é cor de pele. Na dúvida (30% ou mais de pele), conta como nude.
+    private fun ehPele(c: Int): Boolean {
+        val r = Color.red(c)
+        val g = Color.green(c)
+        val b = Color.blue(c)
+        if (r <= 95 || g <= 40 || b <= 20 || r <= g || r <= b || abs(r - g) <= 15 || r - minOf(g, b) <= 15) return false
+        val cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b
+        val cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b
+        return cb in 77.0..127.0 && cr in 133.0..173.0
+    }
+
+    fun pareceNude(f: File): Boolean {
+        // Imagens pequenas (figurinhas, ícones) ficam de fora
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(f.absolutePath, o)
+        if (o.outWidth < 300 || o.outHeight < 300) return false
+        val b = carregarImagem(f, 96) ?: return false
+        val p = Bitmap.createScaledBitmap(b, 48, 48, true)
+        var pele = 0
+        for (y in 0 until 48) for (x in 0 until 48) if (ehPele(p.getPixel(x, y))) pele++
+        if (p != b) p.recycle()
+        b.recycle()
+        return pele >= 48 * 48 * 30 / 100
     }
 
     // ---------- Datas guardadas (para abrir rápido) ----------
