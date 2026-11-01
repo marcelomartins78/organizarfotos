@@ -258,6 +258,9 @@ class MainActivity : Activity() {
     private fun protegerWhatsApp() {
         verificandoWhats = true
         Thread {
+            // Cofre único: pastas ocultas antigas viram subpastas do cofre (criptografadas logo abaixo)
+            val juntadas = try { Ferramentas.juntarNoCofre() } catch (_: Exception) { 0 }
+            if (juntadas > 0) runOnUiThread { info.text = "Passando $juntadas pasta(s) oculta(s) para o cofre e criptografando..." }
             // Garante que nada fica sem criptografia: DCIM/nudes antiga e fotos soltas dentro da Protegida
             val recolhidas = try { Ferramentas.recolherNudesAntiga() } catch (_: Exception) { emptyList() }
             if (recolhidas.isNotEmpty()) MediaScannerConnection.scanFile(this@MainActivity, recolhidas.toTypedArray(), null, null)
@@ -453,7 +456,7 @@ class MainActivity : Activity() {
         val pa = pastaAberta
         when {
             g != null -> { faixa.visibility = View.VISIBLE; faixaTexto.text = "Repetidas ($tipoRepetidas): ${g.size} grupo(s)" }
-            pa != null -> { faixa.visibility = View.VISIBLE; faixaTexto.text = "🔒 Pasta oculta: ${pa.name}" }
+            pa != null -> { faixa.visibility = View.VISIBLE; faixaTexto.text = "🔒 Cofre" + pa.absolutePath.removePrefix(File(Ferramentas.cofre, Ferramentas.ESPECIAL).absolutePath).replace("/", " › ") }
             else -> faixa.visibility = View.GONE
         }
         adaptador.notifyDataSetChanged()
@@ -833,7 +836,7 @@ class MainActivity : Activity() {
     // ---------- Mover / Renomear ----------
     private fun iniciarServico(acao: String, alvo: List<Midia>, destino: File?) {
         if (ServicoOrganizar.rodando) { aviso("Já tem um processo rodando."); return }
-        if (pastaAberta?.let { Ferramentas.dentroEspecial(it) } == true) { aviso("Na pasta Protegida dá só pra ver, encaminhar e excluir. Para tirar as fotos daqui, use Desocultar."); return }
+        if (pastaAberta?.let { Ferramentas.dentroEspecial(it) } == true) { aviso("Dentro do cofre dá só pra ver, encaminhar e excluir."); return }
         if (alvo.isEmpty()) { aviso("Nada para fazer."); return }
         ServicoOrganizar.fila = alvo
         ServicoOrganizar.acao = acao
@@ -880,10 +883,8 @@ class MainActivity : Activity() {
         val opcoes: List<Pair<String, () -> Unit>> = listOf(
             "🔍  Procurar" to { procurar() },
             "📤  Encaminhar" to { encaminharSelecionadas() },
-            "🔒  Especial" to { moverEspecial() },
+            "🔒  Mandar pro cofre" to { mandarProCofre() },
             "📂  Mover para..." to { moverParaPasta() },
-            "🙈  Mover p/ pasta oculta" to { moverParaOculta() },
-            "📁  Mover pasta p/ privada" to { moverPastaParaPrivada() },
             "✏️  Renomear" to { confirmarServico("renomear") },
             "👥  Repetidas" to { menuRepetidas() },
             "♻️  Lixeira" to { abrirLixeira() },
@@ -896,58 +897,40 @@ class MainActivity : Activity() {
         p.show()
     }
 
-    // Botão Especial: manda as selecionadas para a pasta Protegida, renomeando com data + letras
-    private fun moverEspecial() {
-        if (selecionadas.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto)."); return }
+    private fun tituloCofre(p: File): String = "“🔒 " + p.absolutePath.removePrefix(Ferramentas.cofre.absolutePath + "/") + "”"
+
+    // Mostra as pastas do cofre, por isso pede a senha (dentro do cofre ela já foi digitada)
+    private fun comSenha(acao: () -> Unit) { if (pastaAberta != null) acao() else pedirPin(acao) }
+
+    // Mandar pro cofre: manda as fotos selecionadas (ou, sem seleção, uma pasta inteira).
+    // Tudo que entra no cofre é criptografado.
+    private fun mandarProCofre() {
+        val cofre = Ferramentas.pastaEspecial()
+        if (cofre == null) { aviso("Não consegui preparar o cofre."); return }
         val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
-        val pasta = Ferramentas.pastaEspecial()
-        if (pasta == null) { aviso("Não consegui preparar a pasta Protegida."); return }
-        // Mostra as subpastas da Protegida (e deixa criar uma nova), por isso pede a senha
-        val escolher = {
-            escolherPasta("Mover aqui", pasta, pasta) { p ->
-                confirmar("Mover ${alvo.size} item(ns) para ${tituloOculta(p)} (oculta, com senha), renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
+        if (alvo.isEmpty()) {
+            confirmar("Nenhuma foto selecionada. Quer mandar uma pasta inteira pro cofre?") { comSenha { mandarPastaProCofre(cofre) } }
+            return
+        }
+        comSenha {
+            escolherPasta("Mandar aqui", cofre, cofre) { p ->
+                confirmar("Mandar ${alvo.size} item(ns) para ${tituloCofre(p)}, criptografando e renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
             }
         }
-        if (pastaAberta != null) escolher() else pedirPin { escolher() }
     }
 
-    private fun tituloOculta(p: File): String = "“" + p.absolutePath.removePrefix(Ferramentas.cofre.absolutePath + "/") + "”"
-
-    private fun moverParaOculta() {
-        if (selecionadas.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto)."); return }
-        val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
-        val escolher = {
-            escolherOculta { oculta ->
-                // Entra na pasta oculta escolhida: dá para escolher ou criar uma subpasta
-                escolherPasta("Mover aqui", oculta, oculta) { p ->
-                    if (p.absolutePath == pastaAberta?.absolutePath) aviso("Essas fotos já estão nessa pasta.")
-                    else confirmar("Mover ${alvo.size} item(ns) para a pasta oculta ${tituloOculta(p)}, renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
+    private fun mandarPastaProCofre(cofre: File) {
+        escolherPasta("Mandar esta", Ferramentas.raiz) { origem ->
+            val c = origem.absolutePath
+            if (c == Ferramentas.raiz.absolutePath || c == Ferramentas.dcim.absolutePath ||
+                c.startsWith(File(Ferramentas.raiz, "Android").absolutePath)) {
+                aviso("Essa pasta não pode ser movida.")
+            } else escolherPasta("Mandar aqui", cofre, cofre) { destino ->
+                confirmar("Mandar a pasta “${origem.name}” e tudo que tem dentro para ${tituloCofre(destino)}? Tudo será criptografado e some da Galeria e do Google Fotos.") {
+                    moverPasta(origem, destino)
                 }
             }
         }
-        // Dentro de uma pasta oculta a senha já foi digitada
-        if (pastaAberta != null) escolher() else pedirPin { escolher() }
-    }
-
-    // Escolhe uma pasta comum e manda ela inteira para dentro de uma pasta privada
-    // pedirSenha = false quando já veio do painel das pastas ocultas (senha já digitada)
-    private fun moverPastaParaPrivada(pedirSenha: Boolean = true) {
-        val escolher = {
-            escolherPasta("Mover esta", Ferramentas.raiz) { origem ->
-                val c = origem.absolutePath
-                if (c == Ferramentas.raiz.absolutePath || c == Ferramentas.dcim.absolutePath ||
-                    c.startsWith(File(Ferramentas.raiz, "Android").absolutePath)) {
-                    aviso("Essa pasta não pode ser movida.")
-                } else escolherOculta("Mover a pasta “${origem.name}” para:") { oculta ->
-                    escolherPasta("Mover para cá", oculta, oculta) { destino ->
-                        confirmar("Mover a pasta “${origem.name}” e tudo que tem dentro para ${tituloOculta(destino)}? Ela some da Galeria e do Google Fotos.") {
-                            moverPasta(origem, destino)
-                        }
-                    }
-                }
-            }
-        }
-        if (!pedirSenha || pastaAberta != null) escolher() else pedirPin { escolher() }
     }
 
     private fun moverPasta(origem: File, destino: File) {
@@ -965,41 +948,12 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (r == null) aviso("Não consegui mover a pasta.")
                 else {
-                    aviso("Pasta movida para ${tituloOculta(r.first)}: ${r.second.size} foto(s)/vídeo(s)" + (if (protegidos > 0) ", criptografados." else "."))
+                    aviso("Pasta movida para ${tituloCofre(r.first)}: ${r.second.size} foto(s)/vídeo(s)" + (if (protegidos > 0) ", criptografados." else "."))
                     jaProcurou = false
                     procurar()
                 }
             }
         }.start()
-    }
-
-    private fun escolherOculta(aoEscolher: (File) -> Unit) = escolherOculta("Mover para a pasta oculta:", aoEscolher)
-
-    private fun escolherOculta(titulo: String, aoEscolher: (File) -> Unit) {
-        val pastas = Ferramentas.pastasOcultas().map { it.first }
-        val nomes = listOf("➕ Nova pasta oculta") + pastas.map { "🔒 " + it.name }
-        AlertDialog.Builder(this)
-            .setTitle(titulo)
-            .setItems(nomes.toTypedArray()) { _, i -> if (i == 0) novaOculta(aoEscolher) else aoEscolher(pastas[i - 1]) }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    private fun novaOculta(depois: (File) -> Unit) {
-        val campo = EditText(this)
-        campo.hint = "nome da pasta"
-        campo.setSingleLine(true)
-        AlertDialog.Builder(this)
-            .setTitle("Nova pasta oculta")
-            .setView(caixa(campo))
-            .setPositiveButton("Criar") { _, _ ->
-                val nome = campo.text.toString().trim()
-                if (nome.isEmpty() || nome.contains("/") || nome.startsWith(".") || nome == "indice.txt") { aviso("Nome inválido."); return@setPositiveButton }
-                val p = Ferramentas.novaOculta(nome)
-                if (p == null) aviso("Não consegui criar a pasta (talvez já exista uma com esse nome).") else depois(p)
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
     }
 
     // topo: até onde dá para voltar (o armazenamento todo, ou uma pasta oculta)
@@ -1289,43 +1243,29 @@ class MainActivity : Activity() {
             .show()
     }
 
+    // Painel do gesto secreto: agora é só o cofre
     private fun painelOcultas() {
-        val pastas = Ferramentas.pastasOcultas()
-        val b = AlertDialog.Builder(this).setTitle("🔒 Pastas ocultas (${pastas.size})")
-        val nomes = listOf("➕ Nova pasta oculta", "📁 Mover uma pasta para cá") + pastas.map { (f, o) -> "🔒 ${f.name}\n   era: " + relativo(File(o).parentFile ?: Ferramentas.raiz) }
-        b.setItems(nomes.toTypedArray()) { _, i ->
-            when (i) {
-                0 -> novaOculta { aviso("Pasta oculta “${it.name}” criada.") }
-                1 -> moverPastaParaPrivada(false)
-                else -> opcoesOculta(pastas[i - 2].first, pastas[i - 2].second)
-            }
-        }
-        b.setPositiveButton("Esconder outra pasta?") { _, _ -> escolherOcultar() }
-            .setNeutralButton("Trocar senha") { _, _ -> criarPin { aviso("Senha trocada.") } }
-            .setNegativeButton("Fechar", null)
-            .show()
-    }
-
-    private fun opcoesOculta(f: File, original: String) {
+        val cofre = Ferramentas.pastaEspecial()
+        if (cofre == null) { aviso("Não consegui preparar o cofre."); return }
         AlertDialog.Builder(this)
-            .setTitle(f.name)
-            .setItems(arrayOf("Ver fotos", "Desocultar")) { _, i ->
-                if (i == 0 && Ferramentas.ehEspecial(f)) abrirEspecial(f)
-                else if (i == 0) {
-                    grupos = null
-                    selecionadas.clear()
-                    pastaAberta = f
-                    procurar()
-                } else if (Ferramentas.ehEspecial(f)) {
-                    // A Protegida sai descriptografada: pede a senha de novo antes
-                    pedirPin {
-                        confirmar("Desocultar a pasta Protegida? Todas as fotos dela serão DESCRIPTOGRAFADAS e voltam para " +
-                            relativo(File(original).parentFile ?: Ferramentas.raiz) + ", aparecendo de novo na Galeria.") { desocultar(f, original) }
+            .setTitle("🔒 Cofre")
+            .setItems(arrayOf("📂 Abrir o cofre", "📁 Mandar uma pasta pro cofre", "🔓 Devolver tudo para a galeria")) { _, i ->
+                when (i) {
+                    0 -> abrirEspecial(cofre)
+                    1 -> mandarPastaProCofre(cofre)
+                    else -> {
+                        val original = Ferramentas.pastasOcultas().firstOrNull { Ferramentas.ehEspecial(it.first) }?.second
+                            ?: File(Ferramentas.dcim, Ferramentas.ESPECIAL).absolutePath
+                        // Tudo sai descriptografado: pede a senha de novo antes
+                        pedirPin {
+                            confirmar("Devolver TUDO do cofre para a galeria? Todas as fotos serão DESCRIPTOGRAFADAS e voltam para " +
+                                relativo(File(original).parentFile ?: Ferramentas.raiz) + ", aparecendo de novo na Galeria.") { desocultar(cofre, original) }
+                        }
                     }
-                } else confirmar("Desocultar “${f.name}”? Ela volta para " + relativo(File(original).parentFile ?: Ferramentas.raiz) + " e aparece de novo na Galeria.") {
-                    desocultar(f, original)
                 }
             }
+            .setNeutralButton("Trocar senha") { _, _ -> criarPin { aviso("Senha trocada.") } }
+            .setNegativeButton("Fechar", null)
             .show()
     }
 
@@ -1342,31 +1282,6 @@ class MainActivity : Activity() {
                 procurar()
             }
         }.start()
-    }
-
-    private fun escolherOcultar() {
-        escolherPasta("Ocultar esta", Ferramentas.raiz) { p ->
-            val c = p.absolutePath
-            if (c == Ferramentas.raiz.absolutePath || c == Ferramentas.dcim.absolutePath ||
-                c.startsWith(File(Ferramentas.raiz, "Android").absolutePath)) {
-                aviso("Essa pasta não pode ser ocultada.")
-            } else confirmar("Ocultar a pasta “${p.name}” e tudo que tem dentro? Ela some da Galeria e do Google Fotos deste celular.") {
-                info.text = "Ocultando..."
-                Thread {
-                    val antigos = try { Ferramentas.ocultarPasta(p) } catch (_: Exception) { null }
-                    if (antigos != null && antigos.isNotEmpty())
-                        MediaScannerConnection.scanFile(this@MainActivity, antigos.toTypedArray(), null, null)
-                    runOnUiThread {
-                        if (antigos == null) aviso("Não consegui ocultar a pasta.")
-                        else {
-                            aviso("Pasta ocultada.")
-                            jaProcurou = false
-                            procurar()
-                        }
-                    }
-                }.start()
-            }
-        }
     }
 
     private fun desocultar(f: File, original: String) {

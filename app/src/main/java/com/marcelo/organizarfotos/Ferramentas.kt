@@ -319,18 +319,7 @@ object Ferramentas {
 
     fun pastasOcultas(): List<Pair<File, String>> { trocarNomeEspecial(); return lerIndice(cofre, indiceCofre) }
 
-    // Pasta oculta nova, criada direto dentro do cofre (se desocultar, vai para o DCIM)
-    @Synchronized fun novaOculta(nome: String): File? {
-        cofre.mkdirs()
-        val nm = File(cofre, ".nomedia")
-        if (!nm.exists()) nm.createNewFile()
-        val p = File(cofre, nome)
-        if (p.exists() || !p.mkdirs()) return null
-        indiceCofre.appendText(nome + "\t" + File(dcim, nome).absolutePath + "\n")
-        return p
-    }
-
-    // Pasta protegida do botão Especial: fica dentro do cofre (oculta, com senha e criptografada)
+    // Cofre: a pasta Protegida, dentro de .CofreOrganizarFotos (oculta, com senha e criptografada)
     const val ESPECIAL = "Protegida"
     private val especial get() = File(cofre, ESPECIAL)
 
@@ -341,6 +330,23 @@ object Ferramentas {
         if (indiceCofre.exists()) indiceCofre.writeText(indiceCofre.readLines().filter { it.isNotBlank() }.joinToString("") { l ->
             (if (l.substringBefore("\t") == "nudes") ESPECIAL + "\t" + File(dcim, ESPECIAL).absolutePath else l) + "\n"
         })
+    }
+
+    // Cofre único: as pastas ocultas antigas (sem criptografia) viram subpastas da Protegida.
+    // Devolve quantas pastas foram passadas; trancarPendentes criptografa as fotos depois.
+    @Synchronized fun juntarNoCofre(): Int {
+        trocarNomeEspecial()
+        val outras = lerIndice(cofre, indiceCofre).filter { !ehEspecial(it.first) }
+        if (outras.isEmpty()) return 0
+        val p = pastaEspecial() ?: return 0
+        var n = 0
+        for ((f, _) in outras) {
+            var nome = f.name
+            var k = 1
+            while (File(p, nome).exists()) { nome = "${f.name}_$k"; k++ }
+            if (f.renameTo(File(p, nome))) { tirarDoIndice(indiceCofre, setOf(f.name)); n++ }
+        }
+        return n
     }
 
     @Synchronized fun pastaEspecial(): File? {
@@ -432,6 +438,8 @@ object Ferramentas {
             }
         } catch (e: Exception) { dest.delete(); throw e }
         if (dest.length() != f.length() + 16) { dest.delete(); return false }
+        // Sem isso, fotos sem a data no nome apareceriam com a data de hoje
+        dest.setLastModified(dataDe(f).time)
         f.delete()
         return true
     }
