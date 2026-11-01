@@ -410,7 +410,10 @@ class MainActivity : Activity() {
         Thread {
             if (base == null) try { Ferramentas.limparStatus() } catch (_: Exception) { }
             val arquivos = mutableListOf<File>()
-            if (base != null) Ferramentas.coletar(base, arquivos) else Ferramentas.raizes().forEach { Ferramentas.coletar(it, arquivos) }
+            // No cofre mostra só as fotos da pasta aberta (as subpastas aparecem como linhas de pasta)
+            if (base != null && Ferramentas.dentroEspecial(base))
+                base.listFiles()?.filter { it.isFile && (Ferramentas.criptografado(it) || Ferramentas.ehMidia(it)) }?.let { arquivos.addAll(it) }
+            else if (base != null) Ferramentas.coletar(base, arquivos) else Ferramentas.raizes().forEach { Ferramentas.coletar(it, arquivos) }
             // As datas já lidas ficam guardadas; só as fotos novas precisam ser abertas
             val salvas = if (base == null) Ferramentas.lerDatas(arquivoDatas()) else HashMap()
             val res = Ferramentas.comDatas(arquivos, salvas) { k, total -> runOnUiThread { info.text = "Lendo datas das novas: $k de $total" } }
@@ -451,6 +454,7 @@ class MainActivity : Activity() {
             }
             visiveis = g.flatten()
         } else {
+            linhasDePasta()
             if (nivel == NIVEIS.size - 1) filtradas.chunked(colunas).forEach { linhas.add(Linha(it)) }
             else filtradas.groupBy { Ferramentas.dia(it.data).take(if (nivel == 0) 10 else if (nivel == 1) 7 else 4) }.forEach { (k, itens) ->
                 val t = "${tituloGrupo(k)} — ${itens.size} " + (if (itens.size == 1) "item" else "itens")
@@ -522,15 +526,54 @@ class MainActivity : Activity() {
     private fun relativo(p: File): String = p.absolutePath.removePrefix(Ferramentas.raiz.absolutePath).ifEmpty { "/" }
 
     // ---------- Grade de fotos ----------
+    // ---------- Pastas dentro do cofre ----------
+    private fun cofreRaiz() = File(Ferramentas.cofre, Ferramentas.ESPECIAL)
+
+    private fun linhasDePasta() {
+        val pa = pastaAberta ?: return
+        if (!Ferramentas.dentroEspecial(pa)) return
+        if (!Ferramentas.ehEspecial(pa)) linhas.add(PastaLinha("⬆  Voltar") { subirPasta() })
+        Ferramentas.subpastas(pa).forEach { sub -> linhas.add(PastaLinha("📁  ${sub.name}") { abrirPastaDoCofre(sub) }) }
+        linhas.add(PastaLinha("➕  Nova pasta") { novaPasta(pa) { montarLinhas() } })
+    }
+
+    private fun abrirPastaDoCofre(p: File) {
+        grupos = null
+        selecionadas.clear()
+        todas = emptyList()
+        pastaAberta = p
+        aplicarFiltros()
+        procurar()
+    }
+
+    private fun subirPasta() {
+        val pa = pastaAberta ?: return
+        if (Ferramentas.dentroEspecial(pa) && !Ferramentas.ehEspecial(pa)) abrirPastaDoCofre(pa.parentFile ?: cofreRaiz())
+    }
+
+    // Voltar do celular: dentro de uma subpasta do cofre, sobe uma pasta
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        val pa = pastaAberta
+        if (pa != null && Ferramentas.dentroEspecial(pa) && !Ferramentas.ehEspecial(pa)) subirPasta()
+        else @Suppress("DEPRECATION") super.onBackPressed()
+    }
+
     private inner class Adaptador : BaseAdapter() {
         override fun getCount() = linhas.size
         override fun getItem(p: Int): Any = linhas[p]
         override fun getItemId(p: Int) = p.toLong()
-        override fun getViewTypeCount() = 2
-        override fun getItemViewType(p: Int) = if (linhas[p] is Cabecalho) 0 else 1
+        override fun getViewTypeCount() = 3
+        override fun getItemViewType(p: Int) = when (linhas[p]) { is Cabecalho -> 0; is PastaLinha -> 2; else -> 1 }
 
         override fun getView(p: Int, convertView: View?, parent: ViewGroup?): View {
             val item = linhas[p]
+            if (item is PastaLinha) {
+                val v = (convertView as? TextView) ?: TextView(this@MainActivity).apply { textSize = 17f; setPadding(16, 26, 16, 26) }
+                v.text = item.texto
+                v.setOnClickListener { item.acao() }
+                return v
+            }
             if (item is Cabecalho) {
                 val v = (convertView as? LinearLayout) ?: novoCabecalho()
                 v.getChildAt(0).setBackgroundColor(if (pastaAberta != null) Color.TRANSPARENT else if (item.tudoVerde) VERDE else VERMELHO)

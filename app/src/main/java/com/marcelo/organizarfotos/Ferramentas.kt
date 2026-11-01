@@ -49,6 +49,9 @@ class Cabecalho(val titulo: String, val itens: List<Midia>) {
 
 class Linha(val itens: List<Midia>)
 
+// Linha de pasta dentro do cofre: abrir subpasta, voltar ou criar nova
+class PastaLinha(val texto: String, val acao: () -> Unit)
+
 class Guardada(val mod: Long, val tam: Long, val data: Long)
 
 object Ferramentas {
