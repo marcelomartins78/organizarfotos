@@ -126,7 +126,7 @@ class MainActivity : Activity() {
                 if (automatico) {
                     automatico = false
                     if (l.isNotBlank()) aviso("Algumas fotos do WhatsApp não foram para o cofre.\n\nDetalhes:\n" + l.take(3000))
-                    else if (ServicoOrganizar.feitos > 0) aviso("🔒 ${ServicoOrganizar.feitos} foto(s) do WhatsApp que pareciam nudes foram para Cofre › WhatsApp.\n\nSe alguma não for, abra o cofre, selecione e use \"Devolver p/ galeria\".")
+                    else if (ServicoOrganizar.feitos > 0) aviso("🔒 ${ServicoOrganizar.feitos} foto(s) do WhatsApp que pareciam nudes foram para Cofre › Recentes.\n\nSe alguma não for, abra o cofre, selecione e use \"Devolver p/ galeria\".")
                 } else aviso(ServicoOrganizar.status + (if (l.isNotBlank()) "\n\nDetalhes:\n" + l.take(3000) else ""))
                 procurar()
             }
@@ -265,7 +265,8 @@ class MainActivity : Activity() {
             val recolhidas = try { Ferramentas.recolherNudesAntiga() } catch (_: Exception) { emptyList() }
             if (recolhidas.isNotEmpty()) MediaScannerConnection.scanFile(this@MainActivity, recolhidas.toTypedArray(), null, null)
             try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
-            // Fotos recebidas no WhatsApp que parecem nudes vão sozinhas para Cofre › WhatsApp.
+            try { Ferramentas.soltosParaRecentes() } catch (_: Exception) { }
+            // Fotos recebidas no WhatsApp que parecem nudes vão sozinhas para Cofre › Recentes.
             // Cada foto é analisada uma vez só (a lista das já vistas fica guardada).
             val vistas = File(filesDir, "whatsapp_vistas.txt")
             val alvo = try {
@@ -280,7 +281,7 @@ class MainActivity : Activity() {
                 if (novas.isNotEmpty()) vistas.writeText(ja.joinToString("\n"))
                 nudes
             } catch (_: Exception) { emptyList() }
-            val pasta = if (alvo.isNotEmpty()) Ferramentas.pastaEspecial()?.let { File(it, "WhatsApp").apply { mkdirs() } } else null
+            val pasta = if (alvo.isNotEmpty()) Ferramentas.pastaRecentes() else null
             runOnUiThread {
                 verificandoWhats = false
                 if (pasta != null && pastaAberta == null && !ServicoOrganizar.rodando && esperando < 0) {
@@ -973,24 +974,16 @@ class MainActivity : Activity() {
 
     private fun tituloCofre(p: File): String = "“🔒 " + p.absolutePath.removePrefix(Ferramentas.cofre.absolutePath + "/") + "”"
 
-    // Mostra as pastas do cofre, por isso pede a senha (dentro do cofre ela já foi digitada)
-    private fun comSenha(acao: () -> Unit) { if (pastaAberta != null) acao() else pedirPin(acao) }
 
     // Mandar pro cofre: manda as fotos selecionadas (ou, sem seleção, uma pasta inteira).
     // Tudo que entra no cofre é criptografado.
+    // Mandar pro cofre: as fotos selecionadas vão para Cofre › Recentes, criptografadas
     private fun mandarProCofre() {
-        val cofre = Ferramentas.pastaEspecial()
-        if (cofre == null) { aviso("Não consegui preparar o cofre."); return }
         val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
-        if (alvo.isEmpty()) {
-            confirmar("Nenhuma foto selecionada. Quer mandar uma pasta inteira pro cofre?") { comSenha { mandarPastaProCofre(cofre) } }
-            return
-        }
-        comSenha {
-            escolherPasta("Mandar aqui", cofre, cofre) { p ->
-                confirmar("Mandar ${alvo.size} item(ns) para ${tituloCofre(p)}, criptografando e renomeando com data + letras?") { iniciarServico("pasta", alvo, p) }
-            }
-        }
+        if (alvo.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto)."); return }
+        val rec = Ferramentas.pastaRecentes()
+        if (rec == null) { aviso("Não consegui preparar o cofre."); return }
+        confirmar("Mandar ${alvo.size} item(ns) para o cofre (pasta Recentes), criptografando e renomeando com data + letras?") { iniciarServico("pasta", alvo, rec) }
     }
 
     private fun mandarPastaProCofre(cofre: File) {
@@ -999,10 +992,8 @@ class MainActivity : Activity() {
             if (c == Ferramentas.raiz.absolutePath || c == Ferramentas.dcim.absolutePath ||
                 c.startsWith(File(Ferramentas.raiz, "Android").absolutePath)) {
                 aviso("Essa pasta não pode ser movida.")
-            } else escolherPasta("Mandar aqui", cofre, cofre) { destino ->
-                confirmar("Mandar a pasta “${origem.name}” e tudo que tem dentro para ${tituloCofre(destino)}? Tudo será criptografado e some da Galeria e do Google Fotos.") {
-                    moverPasta(origem, destino)
-                }
+            } else confirmar("Mandar a pasta “${origem.name}” e tudo que tem dentro para o cofre? Ela vira uma pasta do cofre, tudo é criptografado e some da Galeria e do Google Fotos.") {
+                moverPasta(origem, cofre)
             }
         }
     }
@@ -1375,6 +1366,7 @@ class MainActivity : Activity() {
         info.text = "Abrindo pasta protegida..."
         Thread {
             try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
+            try { Ferramentas.soltosParaRecentes() } catch (_: Exception) { }
             runOnUiThread {
                 grupos = null
                 selecionadas.clear()

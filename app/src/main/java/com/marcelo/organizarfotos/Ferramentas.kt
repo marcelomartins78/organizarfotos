@@ -530,6 +530,27 @@ object Ferramentas {
         override fun close() = raf.close()
     }
 
+    // Pasta fixa "Recentes": tudo que entra no cofre sem pasta definida cai nela
+    const val RECENTES = "Recentes"
+
+    @Synchronized fun pastaRecentes(): File? = pastaEspecial()?.let { p -> File(p, RECENTES).also { it.mkdirs() } }
+
+    // Arquivos soltos na raiz do cofre vão para Recentes (continuam criptografados, só mudam de pasta)
+    @Synchronized fun soltosParaRecentes(): Int {
+        val raizCofre = especial
+        val soltos = raizCofre.listFiles()?.filter { it.isFile } ?: return 0
+        if (soltos.isEmpty()) return 0
+        val rec = pastaRecentes() ?: return 0
+        var n = 0
+        for (f in soltos) {
+            var dest = File(rec, f.name)
+            var k = 1
+            while (dest.exists()) { dest = File(rec, "${k}_${f.name}"); k++ }
+            if (f.renameTo(dest)) n++
+        }
+        return n
+    }
+
     // Tira uma foto do cofre: descriptografa para DCIM/<data da foto>, com o mesmo nome
     @Synchronized fun devolver(f: File, data: Date): File? {
         val pasta = File(dcim, dia(data))
