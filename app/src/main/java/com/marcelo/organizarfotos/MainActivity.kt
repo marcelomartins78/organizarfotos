@@ -409,7 +409,7 @@ class MainActivity : Activity() {
         jaProcurou = true
         val base = pastaAberta
         info.text = "Procurando arquivos..."
-        Thread {
+        Thread { try {
             if (base == null) try { Ferramentas.limparStatus() } catch (_: Exception) { }
             val arquivos = mutableListOf<File>()
             // No cofre mostra só as fotos da pasta aberta (as subpastas aparecem como linhas de pasta)
@@ -430,7 +430,23 @@ class MainActivity : Activity() {
                     aplicarFiltros()
                 } else procurar()
             }
-        }.start()
+        } catch (e: Throwable) {
+            // Se algo der errado, a busca não pode ficar travada (senão Repetidas e Procurar param de funcionar)
+            runOnUiThread { procurando = false; info.text = "Erro ao procurar as fotos: ${e.message ?: e.javaClass.simpleName}" }
+        } }.start()
+    }
+
+    // Repetidas não roda junto com a busca de fotos: avisa em vez de ignorar o toque
+    private fun ocupado(): Boolean {
+        if (!procurando) return false
+        aviso("Espere a busca de fotos terminar e tente de novo.")
+        return true
+    }
+
+    private fun erroRepetidas(e: Throwable) = runOnUiThread {
+        procurando = false
+        atualizarLista()
+        aviso("Não consegui procurar as repetidas: ${e.message ?: e.javaClass.simpleName}")
     }
 
     private fun aplicarFiltros() {
@@ -1128,10 +1144,10 @@ class MainActivity : Activity() {
     }
 
     private fun buscarIdenticas() {
-        if (procurando) return
+        if (ocupado()) return
         procurando = true
         val base = filtradas
-        Thread {
+        Thread { try {
             val candidatos = base.groupBy { it.arquivo.length() }.values.filter { it.size > 1 }
             val total = candidatos.sumOf { it.size }
             var feitos = 0
@@ -1141,24 +1157,24 @@ class MainActivity : Activity() {
                     feitos++
                     val f = feitos
                     if (f % 10 == 0) runOnUiThread { info.text = "Comparando arquivos: $f de $total" }
-                    try { Ferramentas.md5(m.arquivo) } catch (_: Exception) { m.arquivo.absolutePath }
+                    try { Ferramentas.md5(m.arquivo) } catch (_: Throwable) { m.arquivo.absolutePath }
                 }
                 res.addAll(porHash.values.filter { it.size > 1 })
             }
             runOnUiThread { procurando = false; mostrarRepetidas(res, "idênticas") }
-        }.start()
+        } catch (e: Throwable) { erroRepetidas(e) } }.start()
     }
 
     private fun buscarParecidas() {
-        if (procurando) return
+        if (ocupado()) return
         procurando = true
         val base = filtradas
-        Thread {
+        Thread { try {
             val fotos = base.filter { !it.video }
             val hashes = ArrayList<Pair<Midia, Long>>()
             for ((k, m) in fotos.withIndex()) {
                 if (k % 10 == 0) runOnUiThread { info.text = "Analisando fotos: $k de ${fotos.size}" }
-                try { Ferramentas.dHash(m.arquivo)?.let { hashes.add(m to it) } } catch (_: Exception) { }
+                try { Ferramentas.dHash(m.arquivo)?.let { hashes.add(m to it) } } catch (_: Throwable) { }
             }
             val usado = BooleanArray(hashes.size)
             val res = mutableListOf<List<Midia>>()
@@ -1175,7 +1191,7 @@ class MainActivity : Activity() {
                 if (g.size > 1) res.add(g)
             }
             runOnUiThread { procurando = false; mostrarRepetidas(res, "parecidas") }
-        }.start()
+        } catch (e: Throwable) { erroRepetidas(e) } }.start()
     }
 
     private fun mostrarRepetidas(res: List<List<Midia>>, tipo: String) {
