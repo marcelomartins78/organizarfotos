@@ -584,8 +584,8 @@ class MainActivity : Activity() {
         val img = cel.getChildAt(0) as ImageView
         (cel.getChildAt(1) as TextView).text = "📁 ${p.pasta.name}\n${p.qtd} " + (if (p.qtd == 1) "item" else "itens")
         cel.setOnClickListener { abrirPastaDoCofre(p.pasta) }
-        // Segurando o dedo: mover a pasta para outra pasta do cofre
-        cel.setOnLongClickListener { moverPastaDoCofre(p.pasta); true }
+        // Segurando o dedo: mover a pasta, ou tirar as subpastas dela para o nível principal
+        cel.setOnLongClickListener { opcoesPastaDoCofre(p.pasta); true }
         val capa = p.capa
         img.tag = capa?.absolutePath
         if (capa == null) { img.setImageDrawable(null); img.setBackgroundColor(Color.DKGRAY); return }
@@ -1462,6 +1462,34 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    private fun opcoesPastaDoCofre(pasta: File) {
+        val subs = Ferramentas.subpastas(pasta)
+        if (subs.isEmpty()) { moverPastaDoCofre(pasta); return }
+        AlertDialog.Builder(this)
+            .setTitle("📁 ${pasta.name}")
+            .setItems(arrayOf("📁 Mover pasta", "⬆ Tirar as subpastas para o nível principal (${subs.size})")) { _, i ->
+                if (i == 0) moverPastaDoCofre(pasta) else tirarSubpastas(pasta, subs)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    // As subpastas saem de dentro da pasta e ficam no nível principal do cofre, junto da Recentes.
+    // As fotos soltas da pasta continuam nela.
+    private fun tirarSubpastas(pasta: File, subs: List<File>) {
+        val raiz = cofreRaiz()
+        confirmar("Tirar ${subs.size} subpasta(s) de dentro de “${pasta.name}” e deixar no nível principal do cofre? As fotos soltas de “${pasta.name}” continuam nela.") {
+            Thread {
+                var falhas = 0
+                for (sub in subs) if ((try { Ferramentas.moverPastaNoCofre(sub, raiz) } catch (_: Exception) { null }) == null) falhas++
+                runOnUiThread {
+                    procurar()
+                    aviso("Subpastas no nível principal: ${subs.size - falhas}" + (if (falhas > 0) "\nNão consegui: $falhas" else ""))
+                }
+            }.start()
+        }
     }
 
     private fun moverPastaDoCofre(pasta: File) {
