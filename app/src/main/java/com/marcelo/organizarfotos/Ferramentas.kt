@@ -501,6 +501,20 @@ object Ferramentas {
         override fun close() = raf.close()
     }
 
+    // Tira uma foto do cofre: descriptografa para DCIM/<data da foto>, com o mesmo nome
+    @Synchronized fun devolver(f: File, data: Date): File? {
+        val pasta = File(dcim, dia(data))
+        val o = File(pasta, nomeReal(f))
+        var dest = o
+        var n = 1
+        while (dest.exists()) { dest = File(pasta, "${o.nameWithoutExtension}_$n.${o.extension}"); n++ }
+        try { descriptografar(f, dest) } catch (_: Exception) { dest.delete(); return null }
+        if (dest.length() != f.length() - 16) { dest.delete(); return null }
+        dest.setLastModified(data.time)
+        f.delete()
+        return dest
+    }
+
     // Criptografa o que ainda estiver aberto dentro da pasta protegida
     fun trancarPendentes(): Int {
         var n = 0

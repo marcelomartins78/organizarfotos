@@ -265,7 +265,8 @@ class MainActivity : Activity() {
             val recolhidas = try { Ferramentas.recolherNudesAntiga() } catch (_: Exception) { emptyList() }
             if (recolhidas.isNotEmpty()) MediaScannerConnection.scanFile(this@MainActivity, recolhidas.toTypedArray(), null, null)
             try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
-            val alvo = try { Ferramentas.midiasWhatsApp().map { Midia(it, Ferramentas.dataDe(it)) } } catch (_: Exception) { emptyList() }
+            // Envio automático do WhatsApp desligado: estava levando fotos que não deviam ir
+            val alvo = emptyList<Midia>()
             val pasta = if (alvo.isNotEmpty()) Ferramentas.pastaEspecial() else null
             runOnUiThread {
                 verificandoWhats = false
@@ -737,6 +738,19 @@ class MainActivity : Activity() {
             if (!naLixeira) {
                 opcoes.add("📤  Encaminhar" to { encaminhar(listOf(itens[pos])) })
                 opcoes.add("🗑️  Excluir" to { excluirAtual() })
+                if (Ferramentas.criptografado(itens[pos].arquivo)) opcoes.add("🔓  Devolver p/ galeria" to {
+                    val m = itens[pos]
+                    devolverParaGaleria(listOf(m)) {
+                        video?.stopPlayback()
+                        video = null
+                        itens.remove(m)
+                        if (itens.isEmpty()) d.dismiss()
+                        else {
+                            if (pos >= itens.size) pos = itens.size - 1
+                            mostrar()
+                        }
+                    }
+                })
             }
             val pm = PopupMenu(this, mais)
             opcoes.forEachIndexed { i, o -> pm.menu.add(0, i, i, o.first) }
@@ -890,7 +904,11 @@ class MainActivity : Activity() {
             "♻️  Lixeira" to { abrirLixeira() },
             "🌓  Tema" to { escolherTema() },
             "❎  Limpar seleção" to { selecionadas.clear(); atualizarLista() }
-        )
+        ).let { l ->
+            if (pastaAberta?.let { Ferramentas.dentroEspecial(it) } == true)
+                listOf<Pair<String, () -> Unit>>("🔓  Devolver p/ galeria" to { devolverParaGaleria(todas.filter { it.arquivo.absolutePath in selecionadas }) }) + l
+            else l
+        }
         val p = PopupMenu(this, ancora)
         opcoes.forEachIndexed { i, o -> p.menu.add(0, i, i, o.first) }
         p.setOnMenuItemClickListener { opcoes[it.itemId].second(); true }
@@ -1095,6 +1113,32 @@ class MainActivity : Activity() {
                 if (falhas > 0) aviso("$falhas item(ns) não puderam ir para a lixeira.")
             }
         }.start()
+    }
+
+    // Tira as fotos do cofre: saem descriptografadas para o DCIM, na pasta da data delas
+    private fun devolverParaGaleria(alvo: List<Midia>, depois: () -> Unit = {}) {
+        val itens = alvo.filter { Ferramentas.criptografado(it.arquivo) }
+        if (itens.isEmpty()) { aviso("Selecione fotos do cofre primeiro (segure o dedo numa foto)."); return }
+        confirmar("Devolver ${itens.size} item(ns) para a galeria? Saem do cofre descriptografados e voltam para o DCIM, na pasta da data.") {
+            info.text = "Devolvendo ${itens.size} item(ns) para a galeria..."
+            Thread {
+                val feitos = mutableSetOf<String>()
+                val novos = mutableListOf<String>()
+                var falhas = 0
+                for (m in itens) {
+                    val dest = try { Ferramentas.devolver(m.arquivo, m.data) } catch (_: Exception) { null }
+                    if (dest != null) { feitos.add(m.arquivo.absolutePath); novos.add(dest.absolutePath) } else falhas++
+                }
+                if (novos.isNotEmpty()) MediaScannerConnection.scanFile(this@MainActivity, novos.toTypedArray(), null, null)
+                runOnUiThread {
+                    todas = todas.filter { it.arquivo.absolutePath !in feitos }
+                    selecionadas.removeAll(feitos)
+                    aplicarFiltros()
+                    if (feitos.isNotEmpty()) depois()
+                    aviso("Devolvidos para a galeria: ${feitos.size}" + (if (falhas > 0) "\nNão consegui: $falhas" else ""))
+                }
+            }.start()
+        }
     }
 
     private fun abrirLixeira() {
