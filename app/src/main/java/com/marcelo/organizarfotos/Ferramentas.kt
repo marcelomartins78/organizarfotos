@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Matrix
+import android.media.MediaDataSource
 import android.media.MediaMetadataRetriever
 import android.media.ThumbnailUtils
 import android.os.Build
@@ -12,7 +13,10 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Size
 import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.InputStream
+import java.io.RandomAccessFile
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -33,7 +37,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class Midia(val arquivo: File, val data: Date) {
-    val video = arquivo.extension.lowercase() in Ferramentas.videos
+    // No cofre o arquivo é "foto.jpg.ofz": o tipo vem da extensão de dentro
+    val video = File(Ferramentas.nomeReal(arquivo)).extension.lowercase() in Ferramentas.videos
     val migrada = Ferramentas.estaMigrada(arquivo)
 }
 
@@ -60,6 +65,9 @@ object Ferramentas {
 
     fun dia(d: Date): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
     fun dataHora(d: Date): String = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.US).format(d)
+
+    fun criptografado(f: File): Boolean = f.extension == EXT
+    fun nomeReal(f: File): String = if (criptografado(f)) f.nameWithoutExtension else f.name
 
     fun ehMidia(f: File): Boolean {
         val ext = f.extension.lowercase()
@@ -92,7 +100,7 @@ object Ferramentas {
                     f.name.startsWith(".") ||
                     ehCache(f)
                 if (!ignorar) coletar(f, lista)
-            } else if (ehMidia(f)) lista.add(f)
+            } else if (ehMidia(f) || criptografado(f)) lista.add(f)
         }
     }
 
@@ -204,7 +212,7 @@ object Ferramentas {
                     val d = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).parse(s)
                     if (d != null && ano(d) > 1980) return d
                 }
-            } else {
+            } else if (ext in videos) {
                 val r = MediaMetadataRetriever()
                 try {
                     r.setDataSource(f.absolutePath)
@@ -429,7 +437,14 @@ object Ferramentas {
     }
 
     fun descriptografar(f: File, dest: File) {
-        f.inputStream().use { inp ->
+        dest.parentFile?.mkdirs()
+        abrirDecifrado(f).use { inp -> dest.outputStream().use { out -> inp.copyTo(out, 65536) } }
+    }
+
+    // Lê o arquivo criptografado já aberto, sem gravar nada no celular
+    fun abrirDecifrado(f: File): InputStream {
+        val inp = f.inputStream()
+        try {
             val iv = ByteArray(16)
             var lidos = 0
             while (lidos < 16) {
@@ -439,9 +454,43 @@ object Ferramentas {
             }
             val c = Cipher.getInstance("AES/CTR/NoPadding")
             c.init(Cipher.DECRYPT_MODE, chave(), IvParameterSpec(iv))
-            dest.parentFile?.mkdirs()
-            dest.outputStream().use { out -> CipherInputStream(inp, c).use { it.copyTo(out, 65536) } }
+            return CipherInputStream(inp, c)
+        } catch (e: Exception) { inp.close(); throw e }
+    }
+
+    // Vídeo criptografado lido em pedaços (para a miniatura), sem descriptografar o arquivo todo.
+    // No modo CTR dá para começar de qualquer ponto: o contador é o IV + número do bloco.
+    private class FonteCifrada(f: File, private val chave: SecretKey) : MediaDataSource() {
+        private val raf = RandomAccessFile(f, "r")
+        private val iv = ByteArray(16).also { raf.readFully(it) }
+        private val total = f.length() - 16
+
+        override fun getSize(): Long = total
+
+        @Synchronized override fun readAt(pos: Long, buf: ByteArray, off: Int, size: Int): Int {
+            if (pos >= total) return -1
+            val n = minOf(size.toLong(), total - pos).toInt()
+            if (n <= 0) return 0
+            val pulo = (pos % 16).toInt()
+            val cont = iv.copyOf()
+            var soma = pos / 16
+            var i = 15
+            while (i >= 0 && soma != 0L) {
+                val v = (cont[i].toInt() and 0xff) + (soma and 0xff).toInt()
+                cont[i] = v.toByte()
+                soma = (soma ushr 8) + (v shr 8)
+                i--
+            }
+            val c = Cipher.getInstance("AES/CTR/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, chave, IvParameterSpec(cont))
+            val cifrado = ByteArray(pulo + n)
+            raf.seek(16 + pos - pulo)
+            raf.readFully(cifrado)
+            System.arraycopy(c.doFinal(cifrado), pulo, buf, off, n)
+            return n
         }
+
+        override fun close() = raf.close()
     }
 
     // Criptografa o que ainda estiver aberto dentro da pasta protegida
@@ -510,7 +559,8 @@ object Ferramentas {
 
     // ---------- Miniaturas e visualização ----------
     fun miniatura(m: Midia, lado: Int): Bitmap? = try {
-        if (m.video) miniaturaVideo(m.arquivo, lado)
+        if (criptografado(m.arquivo) && !m.video) imagemCifrada(m.arquivo, lado)
+        else if (m.video) miniaturaVideo(m.arquivo, lado)
         else if (Build.VERSION.SDK_INT >= 29) ThumbnailUtils.createImageThumbnail(m.arquivo, Size(lado, lado), null)
         else carregarImagem(m.arquivo, lado)
     } catch (_: Exception) { null }
@@ -519,7 +569,7 @@ object Ferramentas {
     fun miniaturaVideo(f: File, lado: Int): Bitmap? {
         val r = MediaMetadataRetriever()
         try {
-            r.setDataSource(f.absolutePath)
+            if (criptografado(f)) r.setDataSource(FonteCifrada(f, chave())) else r.setDataSource(f.absolutePath)
             val dur = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
             val tempos = listOf(1000L, dur / 3, dur / 2, 3000L).filter { it in 0..dur }.distinct().ifEmpty { listOf(0L) }
             var melhor: Bitmap? = null
@@ -567,12 +617,35 @@ object Ferramentas {
         return Bitmap.createBitmap(b, 0, 0, b.width, b.height, mt, true)
     }
 
+    // Foto do cofre: descriptografa na memória e já reduz para o tamanho pedido
+    fun imagemCifrada(f: File, lado: Int): Bitmap? {
+        val bytes = abrirDecifrado(f).use { it.readBytes() }
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+        if (o.outWidth <= 0) return null
+        var s = 1
+        while (o.outWidth / (s * 2) >= lado && o.outHeight / (s * 2) >= lado) s *= 2
+        val b = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = s }) ?: return null
+        val rot = try { ExifInterface(ByteArrayInputStream(bytes)).rotationDegrees } catch (_: Exception) { 0 }
+        if (rot == 0) return b
+        val mt = Matrix().apply { postRotate(rot.toFloat()) }
+        return Bitmap.createBitmap(b, 0, 0, b.width, b.height, mt, true)
+    }
+
     fun tamanho(b: Long): String =
         if (b < 1048576) "${b / 1024} KB" else String.format(Locale.US, "%.1f MB", b / 1048576.0)
 
     fun informacoes(m: Midia, cores: Boolean = true): String {
         val f = m.arquivo
         val sb = StringBuilder()
+        if (criptografado(f)) {
+            sb.append("Nome: ${nomeReal(f)}\n")
+            sb.append("Pasta: 🔒 ${f.parentFile?.absolutePath?.removePrefix(cofre.absolutePath + "/") ?: ""}\n")
+            sb.append("Tamanho: ${tamanho(f.length() - 16)}\n")
+            sb.append("Data e hora: ${dataHora(m.data)}\n")
+            sb.append("Criptografada no cofre\n")
+            return sb.toString()
+        }
         sb.append("Nome: ${f.name}\n")
         sb.append("Pasta: ${f.parent ?: ""}\n")
         sb.append("Tamanho: ${tamanho(f.length())}\n")

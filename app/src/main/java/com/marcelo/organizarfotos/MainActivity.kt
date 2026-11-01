@@ -660,17 +660,27 @@ class MainActivity : Activity() {
                 val mc = MediaController(this)
                 mc.setAnchorView(v)
                 v.setMediaController(mc)
-                v.setVideoPath(m.arquivo.absolutePath)
                 v.setOnPreparedListener { v.start() }
                 area.addView(v, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.CENTER))
                 video = v
+                if (Ferramentas.criptografado(m.arquivo)) {
+                    // Vídeo do cofre: cópia aberta temporária, apagada ao sair do app
+                    Thread {
+                        val tmp = File(File(cacheDir, "cofre"), m.arquivo.relativeTo(Ferramentas.cofre).path.removeSuffix("." + Ferramentas.EXT))
+                        val ok = try { if (!tmp.exists()) Ferramentas.descriptografar(m.arquivo, tmp); true } catch (_: Exception) { tmp.delete(); false }
+                        runOnUiThread { if (ok && itens.getOrNull(pos) === m && video === v) v.setVideoPath(tmp.absolutePath) }
+                    }.start()
+                } else v.setVideoPath(m.arquivo.absolutePath)
             } else {
                 val iv = ImageView(this)
                 iv.scaleType = ImageView.ScaleType.FIT_CENTER
                 area.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
                 val tam = resources.displayMetrics.widthPixels
                 Thread {
-                    val b = try { Ferramentas.carregarImagem(m.arquivo, tam) } catch (_: Exception) { null }
+                    val b = try {
+                        if (Ferramentas.criptografado(m.arquivo)) Ferramentas.imagemCifrada(m.arquivo, tam)
+                        else Ferramentas.carregarImagem(m.arquivo, tam)
+                    } catch (_: Exception) { null }
                     runOnUiThread { if (itens.getOrNull(pos) === m) iv.setImageBitmap(b) }
                 }.start()
             }
@@ -766,7 +776,12 @@ class MainActivity : Activity() {
 
     // A Galeria não enxerga as pastas ocultas, então o app entrega o arquivo direto para o outro app
     private fun uriOculto(f: File): Uri? = try {
-        val arq = if (f.absolutePath.startsWith(cacheDir.absolutePath + "/")) {
+        val arq = if (Ferramentas.criptografado(f)) {
+            // Do cofre: descriptografa uma cópia só para encaminhar
+            val c = File(File(cacheDir, "compartilhar"), Ferramentas.nomeReal(f))
+            Ferramentas.descriptografar(f, c)
+            c
+        } else if (f.absolutePath.startsWith(cacheDir.absolutePath + "/")) {
             // A cópia aberta da pasta protegida some ao sair do app; usa uma cópia própria para encaminhar
             val c = File(File(cacheDir, "compartilhar"), f.name)
             c.parentFile?.mkdirs()
@@ -811,7 +826,7 @@ class MainActivity : Activity() {
     // ---------- Mover / Renomear ----------
     private fun iniciarServico(acao: String, alvo: List<Midia>, destino: File?) {
         if (ServicoOrganizar.rodando) { aviso("Já tem um processo rodando."); return }
-        if (pastaAberta?.absolutePath == pastaDecifrada().absolutePath) { aviso("Na pasta Protegida dá só pra ver, encaminhar e excluir. Para tirar as fotos daqui, use Desocultar."); return }
+        if (pastaAberta?.let { Ferramentas.dentroEspecial(it) } == true) { aviso("Na pasta Protegida dá só pra ver, encaminhar e excluir. Para tirar as fotos daqui, use Desocultar."); return }
         if (alvo.isEmpty()) { aviso("Nada para fazer."); return }
         ServicoOrganizar.fila = alvo
         ServicoOrganizar.acao = acao
@@ -1108,11 +1123,7 @@ class MainActivity : Activity() {
             var falhas = 0
             for (m in alvo) {
                 val c = m.arquivo.absolutePath
-                val enc = encDe(m.arquivo)
-                try {
-                    if (enc != null) { if (Ferramentas.paraLixeira(enc)) { m.arquivo.delete(); feitos.add(c) } else falhas++ }
-                    else if (Ferramentas.paraLixeira(m.arquivo)) feitos.add(c) else falhas++
-                } catch (_: Exception) { falhas++ }
+                try { if (Ferramentas.paraLixeira(m.arquivo)) feitos.add(c) else falhas++ } catch (_: Exception) { falhas++ }
             }
             if (feitos.isNotEmpty()) MediaScannerConnection.scanFile(this@MainActivity, feitos.toTypedArray(), null, null)
             runOnUiThread {
@@ -1311,38 +1322,17 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // Pasta protegida: abre uma cópia legível só dentro do app, apagada ao sair
-    private fun pastaDecifrada() = File(File(cacheDir, "cofre"), Ferramentas.ESPECIAL)
-
-    // Da cópia aberta para o arquivo criptografado de verdade (também nas subpastas)
-    private fun encDe(f: File): File? =
-        if (f.absolutePath.startsWith(pastaDecifrada().absolutePath + "/"))
-            File(File(Ferramentas.cofre, Ferramentas.ESPECIAL), f.relativeTo(pastaDecifrada()).path + "." + Ferramentas.EXT) else null
-
+    // Pasta protegida: só lista os arquivos criptografados. As miniaturas são abertas na memória
+    // conforme aparecem, e a foto inteira só quando você toca nela.
     private fun abrirEspecial(f: File) {
         info.text = "Abrindo pasta protegida..."
         Thread {
-            var falhas = 0
-            val alvo = pastaDecifrada()
-            alvo.deleteRecursively()
-            alvo.mkdirs()
             try { Ferramentas.trancarPendentes() } catch (_: Exception) { }
-            // Inclui as subpastas, mantendo a mesma arrumação na cópia aberta
-            val arquivos = f.walkTopDown().filter { it.isFile }.toList()
-            val abertas = arquivos.count { Ferramentas.ehMidia(it) }
-            val protegidas = arquivos.filter { it.extension == Ferramentas.EXT }
-            protegidas.forEach { e ->
-                val normal = File(alvo, e.relativeTo(f).path.removeSuffix("." + Ferramentas.EXT))
-                try { Ferramentas.descriptografar(e, normal) } catch (_: Exception) { normal.delete(); falhas++ }
-            }
             runOnUiThread {
                 grupos = null
                 selecionadas.clear()
-                pastaAberta = alvo
+                pastaAberta = f
                 procurar()
-                if (falhas > 0) aviso("$falhas arquivo(s) não puderam ser abertos.")
-                else if (protegidas.isEmpty() && abertas == 0) aviso("A pasta protegida está vazia.")
-                else if (abertas > 0) aviso("$abertas arquivo(s) ainda não foram protegidos. Eles continuam guardados na pasta, sem perder nada.")
             }
         }.start()
     }
