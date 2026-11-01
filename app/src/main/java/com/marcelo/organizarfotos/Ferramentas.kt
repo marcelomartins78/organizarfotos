@@ -557,6 +557,19 @@ object Ferramentas {
         return f.renameTo(dest)
     }
 
+    // Muda uma pasta inteira de lugar dentro do cofre (tudo continua criptografado).
+    // Recentes é fixa; uma pasta não pode ir para dentro dela mesma.
+    @Synchronized fun moverPastaNoCofre(dir: File, destino: File): File? {
+        if (!dentroEspecial(dir) || ehEspecial(dir) || !dentroEspecial(destino)) return null
+        if (dir.absolutePath == File(especial, RECENTES).absolutePath) return null
+        if (destino.absolutePath == dir.absolutePath || destino.absolutePath.startsWith(dir.absolutePath + "/")) return null
+        destino.mkdirs()
+        var dest = File(destino, dir.name)
+        var n = 1
+        while (dest.exists()) { dest = File(destino, "${dir.name}_$n"); n++ }
+        return if (dir.renameTo(dest)) dest else null
+    }
+
     // Arquivos soltos na raiz do cofre vão para Recentes (continuam criptografados, só mudam de pasta)
     @Synchronized fun soltosParaRecentes(): Int {
         val raizCofre = especial
