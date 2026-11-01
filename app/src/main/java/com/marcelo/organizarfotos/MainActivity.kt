@@ -82,6 +82,8 @@ class MainActivity : Activity() {
     private var esperando = -1
     private var automatico = false
     private var verificandoWhats = false
+    // Enquanto o outro app (WhatsApp etc.) recebe a foto, o app não apaga a cópia nem tranca o cofre
+    private var compartilhando = false
     private var de: Date? = null
     private var ate: Date? = null
     private var grupos: List<List<Midia>>? = null
@@ -246,6 +248,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        compartilhando = false
         if (!temAcesso()) return
         if (!verificandoWhats && pastaAberta == null && !ServicoOrganizar.rodando && esperando < 0) protegerWhatsApp()
         else if (!jaProcurou) procurar()
@@ -277,6 +280,9 @@ class MainActivity : Activity() {
         handler.removeCallbacks(abrirCofre)
         // Ao fechar, apaga as pastas vazias do DCIM (se nada estiver sendo movido)
         if (!ServicoOrganizar.rodando && esperando < 0) Thread { try { Ferramentas.apagarPastasVazias() } catch (_: Exception) { } }.start()
+        if (compartilhando) return
+        // Ao sair do app: some a cópia usada para encaminhar e as cópias abertas do cofre
+        File(cacheDir, "compartilhar").deleteRecursively()
         File(cacheDir, "cofre").deleteRecursively()
         if (pastaAberta != null) {
             pastaAberta = null
@@ -820,6 +826,7 @@ class MainActivity : Activity() {
         i.type = tipo
         i.clipData = ClipData.newRawUri("", lista[0]).apply { lista.drop(1).forEach { addItem(ClipData.Item(it)) } }
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        compartilhando = true
         startActivity(Intent.createChooser(i, "Encaminhar para"))
     }
 
