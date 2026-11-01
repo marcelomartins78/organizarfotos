@@ -89,6 +89,7 @@ class MainActivity : Activity() {
     private var grupos: List<List<Midia>>? = null
     private var tipoRepetidas = ""
     private var pastaAberta: File? = null
+    private var pastasDoCofre: List<PastaCofre> = emptyList()
     // Pinça: 0 = por dia (4 por linha), 1 = por mês, 2 = por ano, 3 = tudo junto
     private val NIVEIS = intArrayOf(4, 6, 8, 10)
     private var nivel = 0
@@ -112,7 +113,7 @@ class MainActivity : Activity() {
     private var toqueY = -1f
     private var topoNoInicio = false
     private var puxando = false
-    private val abrirCofre = Runnable { puxando = false; pedirPin { painelOcultas() } }
+    private val abrirCofre = Runnable { puxando = false; pedirPin { abrirCofreRaiz() } }
 
     private val monitor = object : Runnable {
         override fun run() {
@@ -419,9 +420,11 @@ class MainActivity : Activity() {
             val salvas = if (base == null) Ferramentas.lerDatas(arquivoDatas()) else HashMap()
             val res = Ferramentas.comDatas(arquivos, salvas) { k, total -> runOnUiThread { info.text = "Lendo datas das novas: $k de $total" } }
             if (base == null) Ferramentas.salvarDatas(arquivoDatas(), res)
+            val pastas = if (base != null && Ferramentas.dentroEspecial(base)) Ferramentas.pastasDoCofre(base) else emptyList()
             runOnUiThread {
                 procurando = false
                 if (base?.absolutePath == pastaAberta?.absolutePath) {
+                    pastasDoCofre = pastas
                     todas = res
                     if (base == null) guardadas = res
                     aplicarFiltros()
@@ -534,14 +537,59 @@ class MainActivity : Activity() {
         val pa = pastaAberta ?: return
         if (!Ferramentas.dentroEspecial(pa)) return
         if (!Ferramentas.ehEspecial(pa)) linhas.add(PastaLinha("⬆  Voltar") { subirPasta() })
-        Ferramentas.subpastas(pa).forEach { sub -> linhas.add(PastaLinha("📁  ${sub.name}") { abrirPastaDoCofre(sub) }) }
-        linhas.add(PastaLinha("➕  Nova pasta") { novaPasta(pa) { montarLinhas() } })
+        pastasDoCofre.chunked(3).forEach { linhas.add(PastasLinha(it)) }
+    }
+
+    private fun abrirCofreRaiz() {
+        val cofre = Ferramentas.pastaEspecial()
+        if (cofre == null) aviso("Não consegui preparar o cofre.") else abrirEspecial(cofre)
+    }
+
+    // Uma linha com até 3 pastas: miniatura (foto mais recente) e nome
+    private fun novaLinhaPastas(): LinearLayout {
+        val l = LinearLayout(this)
+        val t = (resources.displayMetrics.widthPixels - 32) / 3
+        repeat(3) {
+            val cel = LinearLayout(this)
+            cel.orientation = LinearLayout.VERTICAL
+            cel.setPadding(6, 6, 6, 12)
+            val img = ImageView(this)
+            img.scaleType = ImageView.ScaleType.CENTER_CROP
+            cel.addView(img, LinearLayout.LayoutParams(MATCH, t - 12))
+            cel.addView(TextView(this).apply { textSize = 14f; maxLines = 2; setPadding(0, 6, 0, 0) })
+            l.addView(cel, LinearLayout.LayoutParams(t, WRAP))
+        }
+        return l
+    }
+
+    private fun preencherPasta(cel: LinearLayout, p: PastaCofre?) {
+        if (p == null) { cel.visibility = View.INVISIBLE; cel.setOnClickListener(null); return }
+        cel.visibility = View.VISIBLE
+        val img = cel.getChildAt(0) as ImageView
+        (cel.getChildAt(1) as TextView).text = "📁 ${p.pasta.name}\n${p.qtd} " + (if (p.qtd == 1) "item" else "itens")
+        cel.setOnClickListener { abrirPastaDoCofre(p.pasta) }
+        val capa = p.capa
+        img.tag = capa?.absolutePath
+        if (capa == null) { img.setImageDrawable(null); img.setBackgroundColor(Color.DKGRAY); return }
+        val c = capa.absolutePath
+        val b = cache.get(c)
+        if (b != null) { img.setImageBitmap(b); return }
+        img.setImageDrawable(null)
+        img.setBackgroundColor(Color.DKGRAY)
+        val t = (resources.displayMetrics.widthPixels - 32) / 3
+        trabalho.execute {
+            if (img.tag != c) return@execute
+            val bm = Ferramentas.miniatura(Midia(capa, Date(capa.lastModified())), t)
+            if (bm != null) cache.put(c, bm)
+            runOnUiThread { if (img.tag == c) img.setImageBitmap(bm) }
+        }
     }
 
     private fun abrirPastaDoCofre(p: File) {
         grupos = null
         selecionadas.clear()
         todas = emptyList()
+        pastasDoCofre = emptyList()
         pastaAberta = p
         aplicarFiltros()
         procurar()
@@ -552,11 +600,12 @@ class MainActivity : Activity() {
         if (Ferramentas.dentroEspecial(pa) && !Ferramentas.ehEspecial(pa)) abrirPastaDoCofre(pa.parentFile ?: cofreRaiz())
     }
 
-    // Voltar do celular: dentro de uma subpasta do cofre, sobe uma pasta
+    // Voltar do celular: dentro de uma pasta do cofre sobe uma pasta; na tela do cofre, fecha o cofre
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         val pa = pastaAberta
         if (pa != null && Ferramentas.dentroEspecial(pa) && !Ferramentas.ehEspecial(pa)) subirPasta()
+        else if (pa != null) sairModo()
         else @Suppress("DEPRECATION") super.onBackPressed()
     }
 
@@ -564,11 +613,16 @@ class MainActivity : Activity() {
         override fun getCount() = linhas.size
         override fun getItem(p: Int): Any = linhas[p]
         override fun getItemId(p: Int) = p.toLong()
-        override fun getViewTypeCount() = 3
-        override fun getItemViewType(p: Int) = when (linhas[p]) { is Cabecalho -> 0; is PastaLinha -> 2; else -> 1 }
+        override fun getViewTypeCount() = 4
+        override fun getItemViewType(p: Int) = when (linhas[p]) { is Cabecalho -> 0; is PastaLinha -> 2; is PastasLinha -> 3; else -> 1 }
 
         override fun getView(p: Int, convertView: View?, parent: ViewGroup?): View {
             val item = linhas[p]
+            if (item is PastasLinha) {
+                val v = (convertView as? LinearLayout) ?: novaLinhaPastas()
+                for (i in 0 until 3) preencherPasta(v.getChildAt(i) as LinearLayout, item.pastas.getOrNull(i))
+                return v
+            }
             if (item is PastaLinha) {
                 val v = (convertView as? TextView) ?: TextView(this@MainActivity).apply { textSize = 17f; setPadding(16, 26, 16, 26) }
                 v.text = item.texto
@@ -961,11 +1015,7 @@ class MainActivity : Activity() {
             "♻️  Lixeira" to { abrirLixeira() },
             "🌓  Tema" to { escolherTema() },
             "❎  Limpar seleção" to { selecionadas.clear(); atualizarLista() }
-        ).let { l ->
-            if (pastaAberta?.let { Ferramentas.dentroEspecial(it) } == true)
-                listOf<Pair<String, () -> Unit>>("🔓  Devolver p/ galeria" to { devolverParaGaleria(todas.filter { it.arquivo.absolutePath in selecionadas }) }) + l
-            else l
-        }
+        ).let { l -> if (pastaAberta?.let { Ferramentas.dentroEspecial(it) } == true) opcoesDoCofre() else l }
         val p = PopupMenu(this, ancora)
         opcoes.forEachIndexed { i, o -> p.menu.add(0, i, i, o.first) }
         p.setOnMenuItemClickListener { opcoes[it.itemId].second(); true }
@@ -1335,29 +1385,29 @@ class MainActivity : Activity() {
     }
 
     // Painel do gesto secreto: agora é só o cofre
-    private fun painelOcultas() {
-        val cofre = Ferramentas.pastaEspecial()
-        if (cofre == null) { aviso("Não consegui preparar o cofre."); return }
-        AlertDialog.Builder(this)
-            .setTitle("🔒 Cofre")
-            .setItems(arrayOf("📂 Abrir o cofre", "📁 Mandar uma pasta pro cofre", "🔓 Devolver tudo para a galeria")) { _, i ->
-                when (i) {
-                    0 -> abrirEspecial(cofre)
-                    1 -> mandarPastaProCofre(cofre)
-                    else -> {
-                        val original = Ferramentas.pastasOcultas().firstOrNull { Ferramentas.ehEspecial(it.first) }?.second
-                            ?: File(Ferramentas.dcim, Ferramentas.ESPECIAL).absolutePath
-                        // Tudo sai descriptografado: pede a senha de novo antes
-                        pedirPin {
-                            confirmar("Devolver TUDO do cofre para a galeria? Todas as fotos serão DESCRIPTOGRAFADAS e voltam para " +
-                                relativo(File(original).parentFile ?: Ferramentas.raiz) + ", aparecendo de novo na Galeria.") { desocultar(cofre, original) }
-                        }
-                    }
-                }
-            }
-            .setNeutralButton("Trocar senha") { _, _ -> criarPin { aviso("Senha trocada.") } }
-            .setNegativeButton("Fechar", null)
-            .show()
+    // Menu ⋮ dentro do cofre
+    private fun opcoesDoCofre(): List<Pair<String, () -> Unit>> {
+        val sel = { todas.filter { it.arquivo.absolutePath in selecionadas } }
+        return listOf(
+            "📤  Encaminhar" to { encaminharSelecionadas() },
+            "🔓  Devolver p/ galeria" to { devolverParaGaleria(sel()) },
+            "➕  Nova pasta" to { pastaAberta?.let { pa -> novaPasta(pa) { procurar() } } },
+            "📥  Mandar uma pasta pro cofre" to { Ferramentas.pastaEspecial()?.let { mandarPastaProCofre(it) } },
+            "🔑  Trocar senha" to { criarPin { aviso("Senha trocada.") } },
+            "⚠️  Devolver tudo para a galeria" to { devolverTudo() },
+            "❎  Limpar seleção" to { selecionadas.clear(); atualizarLista() }
+        )
+    }
+
+    // Tira tudo do cofre (descriptografado): pede a senha de novo antes
+    private fun devolverTudo() {
+        val cofre = cofreRaiz()
+        val original = Ferramentas.pastasOcultas().firstOrNull { Ferramentas.ehEspecial(it.first) }?.second
+            ?: File(Ferramentas.dcim, Ferramentas.ESPECIAL).absolutePath
+        pedirPin {
+            confirmar("Devolver TUDO do cofre para a galeria? Todas as fotos serão DESCRIPTOGRAFADAS e voltam para " +
+                relativo(File(original).parentFile ?: Ferramentas.raiz) + ", aparecendo de novo na Galeria.") { desocultar(cofre, original) }
+        }
     }
 
     // Pasta protegida: só lista os arquivos criptografados. As miniaturas são abertas na memória
@@ -1387,7 +1437,7 @@ class MainActivity : Activity() {
                 if (dest == null) aviso("Não consegui desocultar.")
                 else {
                     aviso("Pasta de volta em " + relativo(dest.parentFile ?: Ferramentas.raiz) + ".")
-                    if (pastaAberta?.absolutePath == f.absolutePath) pastaAberta = null
+                    if (pastaAberta?.absolutePath?.startsWith(f.absolutePath) == true) pastaAberta = null
                     jaProcurou = false
                     procurar()
                 }

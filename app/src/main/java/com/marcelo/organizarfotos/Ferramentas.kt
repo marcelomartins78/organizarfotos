@@ -49,8 +49,12 @@ class Cabecalho(val titulo: String, val itens: List<Midia>) {
 
 class Linha(val itens: List<Midia>)
 
-// Linha de pasta dentro do cofre: abrir subpasta, voltar ou criar nova
+// Linha de texto dentro do cofre (Voltar)
 class PastaLinha(val texto: String, val acao: () -> Unit)
+
+// Pasta do cofre com a foto mais recente (capa) e quantos itens tem
+class PastaCofre(val pasta: File, val capa: File?, val qtd: Int)
+class PastasLinha(val pastas: List<PastaCofre>)
 
 class Guardada(val mod: Long, val tam: Long, val data: Long)
 
@@ -534,6 +538,13 @@ object Ferramentas {
     const val RECENTES = "Recentes"
 
     @Synchronized fun pastaRecentes(): File? = pastaEspecial()?.let { p -> File(p, RECENTES).also { it.mkdirs() } }
+
+    // Pastas dentro de uma pasta do cofre, com capa e quantidade. Recentes vem sempre primeiro.
+    fun pastasDoCofre(dir: File): List<PastaCofre> =
+        subpastas(dir).map { p ->
+            val arqs = p.walkTopDown().filter { it.isFile && (criptografado(it) || ehMidia(it)) }.toList()
+            PastaCofre(p, arqs.maxByOrNull { it.lastModified() }, arqs.size)
+        }.sortedWith(compareBy({ !(it.pasta.name == RECENTES && ehEspecial(dir)) }, { it.pasta.name.lowercase() }))
 
     // Arquivos soltos na raiz do cofre vão para Recentes (continuam criptografados, só mudam de pasta)
     @Synchronized fun soltosParaRecentes(): Int {
