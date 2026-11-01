@@ -90,6 +90,8 @@ class MainActivity : Activity() {
     private var tipoRepetidas = ""
     private var pastaAberta: File? = null
     private var pastasDoCofre: List<PastaCofre> = emptyList()
+    // Pastas do cofre selecionadas (segurando o dedo), para mover ou excluir várias de uma vez
+    private val pastasSel = mutableSetOf<String>()
     // Pinça: 0 = por dia (4 por linha), 1 = por mês, 2 = por ano, 3 = tudo junto
     private val NIVEIS = intArrayOf(4, 6, 8, 10)
     private var nivel = 0
@@ -307,6 +309,7 @@ class MainActivity : Activity() {
             pastaAberta = null
             grupos = null
             selecionadas.clear()
+            pastasSel.clear()
             todas = guardadas ?: emptyList()
             jaProcurou = false
             aplicarFiltros()
@@ -489,7 +492,8 @@ class MainActivity : Activity() {
     private fun atualizarLista() {
         val verdes = todas.count { it.migrada }
         info.text = (if (pastaAberta != null) "Total: ${todas.size}\n" else "Total: ${todas.size} | Verdes: $verdes | Vermelhas: ${todas.size - verdes}\n") +
-            "Mostrando: ${visiveis.size} | Selecionadas: ${selecionadas.size}"
+            "Mostrando: ${visiveis.size} | Selecionadas: ${selecionadas.size}" +
+            (if (pastasSel.isNotEmpty()) " | Pastas selecionadas: ${pastasSel.size}" else "")
         val g = grupos
         val pa = pastaAberta
         when {
@@ -509,6 +513,7 @@ class MainActivity : Activity() {
             pastaAberta = null
             File(cacheDir, "cofre").deleteRecursively()
             selecionadas.clear()
+            pastasSel.clear()
             todas = guardadas ?: emptyList()
             aplicarFiltros()
             procurar()
@@ -583,9 +588,11 @@ class MainActivity : Activity() {
         cel.visibility = View.VISIBLE
         val img = cel.getChildAt(0) as ImageView
         (cel.getChildAt(1) as TextView).text = "📁 ${p.pasta.name}\n${p.qtd} " + (if (p.qtd == 1) "item" else "itens")
-        cel.setOnClickListener { abrirPastaDoCofre(p.pasta) }
-        // Segurando o dedo: mover a pasta, ou tirar as subpastas dela para o nível principal
-        cel.setOnLongClickListener { opcoesPastaDoCofre(p.pasta); true }
+        // Segurando o dedo seleciona; com alguma pasta selecionada, tocar também seleciona
+        val c0 = p.pasta.absolutePath
+        cel.setBackgroundColor(if (c0 in pastasSel) Color.argb(110, 30, 120, 255) else Color.TRANSPARENT)
+        cel.setOnClickListener { if (pastasSel.isNotEmpty()) alternarPasta(p.pasta) else abrirPastaDoCofre(p.pasta) }
+        cel.setOnLongClickListener { alternarPasta(p.pasta); true }
         val capa = p.capa
         img.tag = capa?.absolutePath
         if (capa == null) { img.setImageDrawable(null); img.setBackgroundColor(Color.DKGRAY); return }
@@ -603,9 +610,18 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun ehRecentes(p: File) = p.absolutePath == File(cofreRaiz(), Ferramentas.RECENTES).absolutePath
+
+    private fun alternarPasta(p: File) {
+        if (ehRecentes(p)) { aviso("A pasta Recentes é fixa: não pode ser movida nem excluída."); return }
+        if (!pastasSel.remove(p.absolutePath)) pastasSel.add(p.absolutePath)
+        atualizarLista()
+    }
+
     private fun abrirPastaDoCofre(p: File) {
         grupos = null
         selecionadas.clear()
+        pastasSel.clear()
         todas = emptyList()
         pastasDoCofre = emptyList()
         pastaAberta = p
@@ -1205,6 +1221,7 @@ class MainActivity : Activity() {
 
     // ---------- Excluir e lixeira ----------
     private fun excluirSelecionadas() {
+        if (pastasSel.isNotEmpty()) { excluirPastasDoCofre(pastasSel.map { File(it) }.filter { it.exists() }); return }
         if (selecionadas.isEmpty()) { aviso("Segure o dedo numa foto para selecionar e depois toque em Excluir."); return }
         val alvo = todas.filter { it.arquivo.absolutePath in selecionadas }
         confirmar("Mandar ${alvo.size} item(ns) para a lixeira do app?") { mandarParaLixeira(alvo) }
@@ -1409,7 +1426,19 @@ class MainActivity : Activity() {
         val pa = pastaAberta
         // Dentro de uma pasta (que não seja a tela principal do cofre nem a Recentes): mover a própria pasta
         val podeMoverPasta = pa != null && !Ferramentas.ehEspecial(pa) && pa.absolutePath != File(cofreRaiz(), Ferramentas.RECENTES).absolutePath
-        return (if (podeMoverPasta) listOf<Pair<String, () -> Unit>>("📁  Mover esta pasta" to { moverPastaDoCofre(pa!!) }) else emptyList()) + listOf(
+        val selPastas = pastasSel.map { File(it) }.filter { it.exists() }
+        val umaComSubs = (selPastas.singleOrNull() ?: if (selPastas.isEmpty() && podeMoverPasta) pa else null)
+            ?.takeIf { Ferramentas.subpastas(it).isNotEmpty() }
+        val dePastas = mutableListOf<Pair<String, () -> Unit>>()
+        if (selPastas.isNotEmpty()) {
+            dePastas.add("📁  Mover pastas selecionadas (${selPastas.size})" to { moverPastasDoCofre(selPastas) })
+            dePastas.add("🗑️  Excluir pastas selecionadas (${selPastas.size})" to { excluirPastasDoCofre(selPastas) })
+        } else if (podeMoverPasta) {
+            dePastas.add("📁  Mover esta pasta" to { moverPastaDoCofre(pa!!) })
+            dePastas.add("🗑️  Excluir esta pasta" to { excluirPastasDoCofre(listOf(pa!!)) })
+        }
+        if (umaComSubs != null) dePastas.add("⬆  Tirar as subpastas de “${umaComSubs.name}”" to { tirarSubpastas(umaComSubs, Ferramentas.subpastas(umaComSubs)) })
+        return dePastas + listOf(
             "📤  Encaminhar" to { encaminharSelecionadas() },
             "📁  Mover para pasta" to { moverNoCofre(sel()) },
             "🔓  Devolver p/ galeria" to { devolverParaGaleria(sel()) },
@@ -1417,14 +1446,14 @@ class MainActivity : Activity() {
             "📥  Mandar uma pasta pro cofre" to { Ferramentas.pastaEspecial()?.let { mandarPastaProCofre(it) } },
             "🔑  Trocar senha" to { criarPin { aviso("Senha trocada.") } },
             "⚠️  Devolver tudo para a galeria" to { devolverTudo() },
-            "❎  Limpar seleção" to { selecionadas.clear(); atualizarLista() }
+            "❎  Limpar seleção" to { selecionadas.clear(); pastasSel.clear(); atualizarLista() }
         )
     }
 
     // Muda as fotos selecionadas de pasta dentro do cofre (continuam criptografadas)
     private fun moverNoCofre(alvo: List<Midia>) {
         val itens = alvo.filter { Ferramentas.criptografado(it.arquivo) }
-        if (itens.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto).\n\nPara mover uma pasta, segure o dedo nela."); return }
+        if (itens.isEmpty()) { aviso("Selecione as fotos primeiro (segure o dedo numa foto).\n\nPara mover pastas, segure o dedo nelas e use ⋮ → Mover pastas selecionadas."); return }
         escolherPastaDoCofre { destino ->
             confirmar("Mover ${itens.size} item(ns) para ${tituloCofre(destino)}?") {
                 Thread {
@@ -1442,38 +1471,28 @@ class MainActivity : Activity() {
 
     // Lista todas as pastas do cofre (Recentes primeiro) e deixa criar uma nova
     // pasta: a pasta sendo movida (ela e as subpastas dela não podem ser destino). Sem ela, são fotos.
-    private fun escolherPastaDoCofre(pasta: File? = null, aoEscolher: (File) -> Unit) {
+    // movidas: as pastas sendo movidas (elas e as subpastas delas não podem ser destino). Vazio: são fotos.
+    private fun escolherPastaDoCofre(movidas: List<File> = emptyList(), aoEscolher: (File) -> Unit) {
         val raiz = cofreRaiz()
-        val fora = pasta?.absolutePath ?: pastaAberta?.absolutePath
-        val pastas = raiz.walkTopDown().filter {
-            it.isDirectory && it != raiz && !it.name.startsWith(".") && it.absolutePath != fora &&
-                (pasta == null || (!it.absolutePath.startsWith(pasta.absolutePath + "/") && it.absolutePath != pasta.parentFile?.absolutePath))
+        val fora = movidas.map { it.absolutePath }.toSet()
+        val pastas = raiz.walkTopDown().filter { d ->
+            d.isDirectory && d != raiz && !d.name.startsWith(".") &&
+                (if (movidas.isEmpty()) d.absolutePath != pastaAberta?.absolutePath
+                 else fora.none { d.absolutePath == it || d.absolutePath.startsWith("$it/") })
         }.sortedWith(compareBy({ it.absolutePath != File(raiz, Ferramentas.RECENTES).absolutePath }, { it.relativeTo(raiz).path.lowercase() }))
             .toList()
-        // Uma pasta pode voltar para o nível principal do cofre (se já não estiver lá)
-        val comRaiz = pasta != null && pasta.parentFile?.absolutePath != raiz.absolutePath
+        // Pastas podem voltar para o nível principal do cofre (se alguma ainda não estiver lá)
+        val comRaiz = movidas.any { it.parentFile?.absolutePath != raiz.absolutePath }
         val topo = listOf("➕ Nova pasta") + (if (comRaiz) listOf("🔒 Cofre (nível principal)") else emptyList())
         val nomes = topo + pastas.map { "📁 " + it.relativeTo(raiz).path.replace("/", " › ") }
         AlertDialog.Builder(this)
-            .setTitle(if (pasta != null) "Mover a pasta “${pasta.name}” para:" else "Mover para a pasta:")
+            .setTitle(when (movidas.size) { 0 -> "Mover para a pasta:"; 1 -> "Mover a pasta “${movidas[0].name}” para:"; else -> "Mover ${movidas.size} pastas para:" })
             .setItems(nomes.toTypedArray()) { _, i ->
                 when {
                     i == 0 -> novaPasta(raiz) { aoEscolher(it) }
                     comRaiz && i == 1 -> aoEscolher(raiz)
                     else -> aoEscolher(pastas[i - topo.size])
                 }
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    private fun opcoesPastaDoCofre(pasta: File) {
-        val subs = Ferramentas.subpastas(pasta)
-        if (subs.isEmpty()) { moverPastaDoCofre(pasta); return }
-        AlertDialog.Builder(this)
-            .setTitle("📁 ${pasta.name}")
-            .setItems(arrayOf("📁 Mover pasta", "⬆ Tirar as subpastas para o nível principal (${subs.size})")) { _, i ->
-                if (i == 0) moverPastaDoCofre(pasta) else tirarSubpastas(pasta, subs)
             }
             .setNegativeButton("Cancelar", null)
             .show()
@@ -1495,19 +1514,50 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun moverPastaDoCofre(pasta: File) {
-        if (pasta.absolutePath == File(cofreRaiz(), Ferramentas.RECENTES).absolutePath) { aviso("A pasta Recentes é fixa e não pode ser movida."); return }
-        escolherPastaDoCofre(pasta) { destino ->
-            confirmar("Mover a pasta “${pasta.name}” e tudo que tem dentro para ${if (Ferramentas.ehEspecial(destino)) "o nível principal do cofre" else tituloCofre(destino)}?") {
+    private fun moverPastaDoCofre(pasta: File) = moverPastasDoCofre(listOf(pasta))
+
+    private fun moverPastasDoCofre(pastas: List<File>) {
+        if (pastas.any { ehRecentes(it) }) { aviso("A pasta Recentes é fixa e não pode ser movida."); return }
+        if (pastas.isEmpty()) return
+        escolherPastaDoCofre(pastas) { destino ->
+            val para = if (Ferramentas.ehEspecial(destino)) "o nível principal do cofre" else tituloCofre(destino)
+            val oque = if (pastas.size == 1) "a pasta “${pastas[0].name}”" else "${pastas.size} pastas"
+            confirmar("Mover $oque e tudo que tem dentro para $para?") {
                 Thread {
-                    val r = try { Ferramentas.moverPastaNoCofre(pasta, destino) } catch (_: Exception) { null }
+                    val novos = pastas.map { p -> p to (try { Ferramentas.moverPastaNoCofre(p, destino) } catch (_: Exception) { null }) }
                     runOnUiThread {
-                        // Se a pasta movida é a que está aberta, a tela acompanha ela no lugar novo
-                        if (r != null && pastaAberta?.absolutePath == pasta.absolutePath) abrirPastaDoCofre(r) else procurar()
-                        if (r == null) aviso("Não consegui mover a pasta.")
+                        pastasSel.clear()
+                        // Se a pasta aberta foi movida, a tela acompanha ela no lugar novo
+                        val aberta = novos.firstOrNull { it.first.absolutePath == pastaAberta?.absolutePath }?.second
+                        if (aberta != null) abrirPastaDoCofre(aberta) else procurar()
+                        val falhas = novos.count { it.second == null }
+                        if (falhas > 0) aviso("Não consegui mover $falhas pasta(s).")
                     }
                 }.start()
             }
+        }
+    }
+
+    // Exclui pastas do cofre: as fotos vão para a lixeira do app (criptografadas, dá para restaurar)
+    private fun excluirPastasDoCofre(pastas: List<File>) {
+        if (pastas.any { ehRecentes(it) }) { aviso("A pasta Recentes é fixa e não pode ser excluída."); return }
+        if (pastas.isEmpty()) return
+        val qtd = pastas.sumOf { p -> p.walkTopDown().count { it.isFile } }
+        val oque = if (pastas.size == 1) "a pasta “${pastas[0].name}”" else "${pastas.size} pastas"
+        confirmar("Excluir $oque (com subpastas) e $qtd item(ns)? Os itens vão para a lixeira do app e dá para restaurar de lá.") {
+            info.text = "Excluindo..."
+            Thread {
+                var falhas = 0
+                for (p in pastas) falhas += (try { Ferramentas.excluirPastaDoCofre(p) } catch (_: Exception) { null }) ?: 1
+                runOnUiThread {
+                    pastasSel.clear()
+                    // Se a pasta aberta foi excluída, volta para a pasta de cima
+                    val pa = pastaAberta
+                    if (pa != null && !pa.exists()) abrirPastaDoCofre(generateSequence(pa) { it.parentFile }.firstOrNull { it.exists() } ?: cofreRaiz())
+                    else procurar()
+                    if (falhas > 0) aviso("Não consegui excluir $falhas item(ns).")
+                }
+            }.start()
         }
     }
 

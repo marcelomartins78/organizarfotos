@@ -563,11 +563,22 @@ object Ferramentas {
         if (!dentroEspecial(dir) || ehEspecial(dir) || !dentroEspecial(destino)) return null
         if (dir.absolutePath == File(especial, RECENTES).absolutePath) return null
         if (destino.absolutePath == dir.absolutePath || destino.absolutePath.startsWith(dir.absolutePath + "/")) return null
+        if (dir.parentFile?.absolutePath == destino.absolutePath) return dir   // já está lá
         destino.mkdirs()
         var dest = File(destino, dir.name)
         var n = 1
         while (dest.exists()) { dest = File(destino, "${dir.name}_$n"); n++ }
         return if (dir.renameTo(dest)) dest else null
+    }
+
+    // Exclui uma pasta do cofre: os arquivos vão para a lixeira do app (criptografados, dá para restaurar)
+    // e as pastas que ficaram vazias somem. Devolve quantos arquivos não foram, ou null se a pasta não pode.
+    @Synchronized fun excluirPastaDoCofre(dir: File): Int? {
+        if (!dentroEspecial(dir) || ehEspecial(dir) || dir.absolutePath == File(especial, RECENTES).absolutePath) return null
+        var falhas = 0
+        dir.walkTopDown().filter { it.isFile }.toList().forEach { if (!(try { paraLixeira(it) } catch (_: Exception) { false })) falhas++ }
+        dir.walkBottomUp().filter { it.isDirectory }.forEach { it.delete() }
+        return falhas
     }
 
     // Arquivos soltos na raiz do cofre vão para Recentes (continuam criptografados, só mudam de pasta)
