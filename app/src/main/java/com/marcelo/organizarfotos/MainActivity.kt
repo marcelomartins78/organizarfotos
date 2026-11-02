@@ -82,8 +82,11 @@ class MainActivity : Activity() {
     private var esperando = -1
     private var automatico = false
     private var verificandoWhats = false
-    // Enquanto o outro app (WhatsApp etc.) recebe a foto, o app não apaga a cópia nem tranca o cofre
+    // Enquanto o outro app (WhatsApp etc.) recebe a foto, a cópia usada para encaminhar não é apagada.
+    // O cofre tranca sempre ao sair do app, mesmo encaminhando.
     private var compartilhando = false
+    // Foto aberta em tela cheia: fecha ao sair do app (não pode ficar uma foto do cofre à mostra)
+    private var visualizador: Dialog? = null
     private var de: Date? = null
     private var ate: Date? = null
     private var grupos: List<List<Midia>>? = null
@@ -301,11 +304,11 @@ class MainActivity : Activity() {
         handler.removeCallbacks(abrirCofre)
         // Ao fechar, apaga as pastas vazias do DCIM (se nada estiver sendo movido)
         if (!ServicoOrganizar.rodando && esperando < 0) Thread { try { Ferramentas.apagarPastasVazias() } catch (_: Exception) { } }.start()
-        if (compartilhando) return
-        // Ao sair do app: some a cópia usada para encaminhar e as cópias abertas do cofre
-        File(cacheDir, "compartilhar").deleteRecursively()
+        // Ao sair do app: some a cópia usada para encaminhar (menos durante o encaminhar) e as cópias abertas do cofre
+        if (!compartilhando) File(cacheDir, "compartilhar").deleteRecursively()
         File(cacheDir, "cofre").deleteRecursively()
         if (pastaAberta != null) {
+            visualizador?.dismiss()
             pastaAberta = null
             grupos = null
             selecionadas.clear()
@@ -786,6 +789,7 @@ class MainActivity : Activity() {
         var pos = inicio.coerceIn(0, itens.size - 1)
         var video: VideoView? = null
         val d = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        visualizador = d
         val tela = FrameLayout(this)
         tela.setBackgroundColor(Color.BLACK)
         val area = AreaArrastar()
@@ -921,7 +925,7 @@ class MainActivity : Activity() {
             topo.visibility = v
             barraBaixo.visibility = v
         }
-        d.setOnDismissListener { video?.stopPlayback() }
+        d.setOnDismissListener { video?.stopPlayback(); if (visualizador === d) visualizador = null }
         mostrar()
         d.setContentView(tela)
         @Suppress("DEPRECATION")
