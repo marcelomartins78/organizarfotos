@@ -1048,6 +1048,7 @@ class MainActivity : Activity() {
             "🔍  Procurar" to { procurar() },
             "📤  Encaminhar" to { encaminharSelecionadas() },
             "🔒  Mandar pro cofre" to { mandarProCofre() },
+            "📁  Pastas das fotos → cofre" to { pastasDasFotos() },
             "📂  Mover para..." to { moverParaPasta() },
             "✏️  Renomear" to { confirmarServico("renomear") },
             "👥  Repetidas" to { menuRepetidas() },
@@ -1073,6 +1074,66 @@ class MainActivity : Activity() {
         val rec = Ferramentas.pastaRecentes()
         if (rec == null) { aviso("Não consegui preparar o cofre."); return }
         confirmar("Mandar ${alvo.size} item(ns) para o cofre (pasta Recentes), criptografando e renomeando com data + letras?") { iniciarServico("pasta", alvo, rec) }
+    }
+
+    // Mostra as pastas onde estão as fotos da tela inicial, para mandar pastas inteiras pro cofre
+    private fun pastasDasFotos() {
+        if (ocupado()) return
+        val raiz = Ferramentas.raiz.absolutePath
+        val android = File(Ferramentas.raiz, "Android").absolutePath
+        val contagem = HashMap<String, Int>()
+        for (m in todas) {
+            var p = m.arquivo.parentFile
+            while (p != null && p.absolutePath.startsWith("$raiz/")) {
+                val c = p.absolutePath
+                if (c != Ferramentas.dcim.absolutePath && c != android && !c.startsWith("$android/")) contagem[c] = (contagem[c] ?: 0) + 1
+                p = p.parentFile
+            }
+        }
+        val lista = contagem.keys.sortedBy { it.lowercase() }
+        if (lista.isEmpty()) { aviso("Nenhuma pasta com fotos encontrada."); return }
+        val nomes = lista.map { c ->
+            "📁 " + c.removePrefix("$raiz/") + " (${contagem[c]})" + (if (Ferramentas.saiuDoCofre(File(c))) "  ⚠️ saiu do cofre" else "")
+        }.toTypedArray()
+        val marcadas = BooleanArray(lista.size)
+        AlertDialog.Builder(this)
+            .setTitle("Marque as pastas para mandar pro cofre")
+            .setMultiChoiceItems(nomes, marcadas) { _, i, v -> marcadas[i] = v }
+            .setPositiveButton("🔒 Mandar pro cofre") { _, _ ->
+                val esc = lista.filterIndexed { i, _ -> marcadas[i] }.map { File(it) }
+                // Se marcou uma pasta e também uma subpasta dela, basta a de cima
+                val topo = esc.filter { e -> esc.none { o -> o != e && e.absolutePath.startsWith(o.absolutePath + "/") } }
+                if (topo.isEmpty()) { aviso("Nenhuma pasta marcada."); return@setPositiveButton }
+                val total = topo.sumOf { contagem[it.absolutePath] ?: 0 }
+                confirmar("Mandar ${topo.size} pasta(s) com $total foto(s)/vídeo(s) pro cofre? Elas viram pastas do cofre, são criptografadas e somem da Galeria deste celular.") {
+                    voltarPastasAoCofre(topo)
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun voltarPastasAoCofre(pastas: List<File>) {
+        if (ServicoOrganizar.rodando || esperando >= 0) { aviso("Já tem um processo rodando."); return }
+        info.text = "Levando ${pastas.size} pasta(s) para o cofre..."
+        Thread {
+            val antigos = mutableListOf<String>()
+            var falhas = 0
+            for (p in pastas) {
+                val r = try { Ferramentas.voltarAoCofre(p) } catch (_: Exception) { null }
+                if (r == null) falhas++ else antigos.addAll(r)
+            }
+            runOnUiThread { info.text = "Criptografando ${antigos.size} foto(s)/vídeo(s)... (pode demorar)" }
+            val protegidos = try { Ferramentas.trancarPendentes() } catch (_: Exception) { 0 }
+            if (antigos.isNotEmpty()) MediaScannerConnection.scanFile(this@MainActivity, antigos.toTypedArray(), null, null)
+            runOnUiThread {
+                jaProcurou = false
+                procurar()
+                aviso("No cofre: ${pastas.size - falhas} pasta(s), $protegidos item(ns) criptografado(s)." +
+                    (if (falhas > 0) "\nNão consegui mover $falhas pasta(s)." else "") +
+                    "\n\nCópias que o Google Fotos já tinha salvo na nuvem continuam lá.")
+            }
+        }.start()
     }
 
     private fun mandarPastaProCofre(cofre: File) {

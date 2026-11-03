@@ -339,6 +339,34 @@ object Ferramentas {
 
     // Move uma pasta comum (com tudo dentro) para dentro de uma pasta privada.
     // Devolve a pasta no lugar novo e os caminhos antigos das fotos (para sumirem da Galeria).
+    // A pasta DCIM/Protegida (ou Protegida_1...) é o que o "Devolver tudo" deixa no DCIM
+    fun saiuDoCofre(dir: File): Boolean = dir.parentFile?.absolutePath == dcim.absolutePath && dir.name.startsWith(ESPECIAL)
+
+    // Leva uma pasta comum de volta para o cofre (as fotos são criptografadas depois, por trancarPendentes).
+    // Se for a Protegida que saiu do cofre, as pastas de dentro voltam para o nível principal do cofre
+    // e as fotos soltas (e as da antiga Recentes) para Recentes. Devolve os caminhos antigos das fotos.
+    @Synchronized fun voltarAoCofre(dir: File): List<String>? {
+        val raizCofre = pastaEspecial() ?: return null
+        if (!saiuDoCofre(dir)) return moverPastaPara(dir, raizCofre)?.second
+        val rec = pastaRecentes() ?: return null
+        val antigos = dir.walkTopDown().filter { it.isFile && ehMidia(it) }.map { it.absolutePath }.toList()
+        fun soltar(f: File, destDir: File) {
+            var dest = File(destDir, f.name)
+            var n = 1
+            while (dest.exists()) { dest = File(destDir, if (f.isDirectory) "${f.name}_$n" else "${n}_${f.name}"); n++ }
+            f.renameTo(dest)
+        }
+        dir.listFiles()?.forEach { f ->
+            when {
+                f.isDirectory && f.name == RECENTES -> f.listFiles()?.forEach { soltar(it, rec) }
+                f.isDirectory -> soltar(f, raizCofre)
+                else -> soltar(f, rec)
+            }
+        }
+        dir.walkBottomUp().filter { it.isDirectory }.forEach { it.delete() }   // só as que ficaram vazias
+        return antigos
+    }
+
     @Synchronized fun moverPastaPara(dir: File, destino: File): Pair<File, List<String>>? {
         val antigos = dir.walkTopDown().filter { it.isFile && ehMidia(it) }.map { it.absolutePath }.toList()
         var nome = dir.name
