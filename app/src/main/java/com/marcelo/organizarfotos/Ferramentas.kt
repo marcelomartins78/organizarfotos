@@ -581,6 +581,12 @@ object Ferramentas {
         return falhas
     }
 
+    // Para conferir o cofre: quantos arquivos estão criptografados e quantos ainda estão abertos
+    fun contarCofre(): Pair<Int, Int> {
+        val arqs = especial.walkTopDown().filter { it.isFile }.toList()
+        return arqs.count { criptografado(it) } to arqs.count { ehMidia(it) }
+    }
+
     // Arquivos soltos na raiz do cofre vão para Recentes (continuam criptografados, só mudam de pasta)
     @Synchronized fun soltosParaRecentes(): Int {
         val raizCofre = especial

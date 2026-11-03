@@ -18,6 +18,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.provider.Settings
 import android.text.Editable
 import android.text.InputFilter
@@ -1080,7 +1081,7 @@ class MainActivity : Activity() {
             if (c == Ferramentas.raiz.absolutePath || c == Ferramentas.dcim.absolutePath ||
                 c.startsWith(File(Ferramentas.raiz, "Android").absolutePath)) {
                 aviso("Essa pasta não pode ser movida.")
-            } else confirmar("Mandar a pasta “${origem.name}” e tudo que tem dentro para o cofre? Ela vira uma pasta do cofre, tudo é criptografado e some da Galeria e do Google Fotos.") {
+            } else confirmar("Mandar a pasta “${origem.name}” e tudo que tem dentro para o cofre? Ela vira uma pasta do cofre, tudo é criptografado e some da Galeria deste celular.\n\nCópias que o Google Fotos já tinha salvo na nuvem continuam lá: apague pelo Google Fotos se quiser.") {
                 moverPasta(origem, cofre)
             }
         }
@@ -1448,6 +1449,7 @@ class MainActivity : Activity() {
             "🔓  Devolver p/ galeria" to { devolverParaGaleria(sel()) },
             "➕  Nova pasta" to { pastaAberta?.let { pa -> novaPasta(pa) { procurar() } } },
             "📥  Mandar uma pasta pro cofre" to { Ferramentas.pastaEspecial()?.let { mandarPastaProCofre(it) } },
+            "🔍  Verificar cofre" to { verificarCofre() },
             "🔑  Trocar senha" to { criarPin { aviso("Senha trocada.") } },
             "⚠️  Devolver tudo para a galeria" to { devolverTudo() },
             "❎  Limpar seleção" to { selecionadas.clear(); pastasSel.clear(); atualizarLista() }
@@ -1563,6 +1565,29 @@ class MainActivity : Activity() {
                 }
             }.start()
         }
+    }
+
+    // Confere se tudo no cofre está criptografado e se a Galeria do celular enxerga algum arquivo de lá
+    private fun verificarCofre() {
+        info.text = "Verificando o cofre..."
+        Thread {
+            val protegidos = try { Ferramentas.trancarPendentes() } catch (_: Exception) { 0 }
+            val (cripto, abertos) = try { Ferramentas.contarCofre() } catch (_: Exception) { 0 to -1 }
+            val naGaleria = try {
+                contentResolver.query(MediaStore.Files.getContentUri("external"), arrayOf(MediaStore.MediaColumns.DATA),
+                    MediaStore.MediaColumns.DATA + " LIKE ?", arrayOf(Ferramentas.cofre.absolutePath + "/%"), null)?.use { it.count } ?: 0
+            } catch (_: Exception) { -1 }
+            runOnUiThread {
+                atualizarLista()
+                aviso("🔍 Cofre\n\n" +
+                    "Criptografados: $cripto\n" +
+                    "Abertos (sem criptografia): " + (if (abertos < 0) "não consegui ler" else "$abertos") +
+                    (if (protegidos > 0) "\n(acabei de criptografar $protegidos)" else "") + "\n" +
+                    "Visíveis na Galeria do celular: " + (if (naGaleria < 0) "não consegui conferir" else "$naGaleria") + "\n\n" +
+                    "Se aparecem fotos do cofre em outros aparelhos, são cópias que o Google Fotos já tinha salvo na nuvem antes de irem para o cofre. " +
+                    "O app não consegue apagar da nuvem: apague pelo Google Fotos (isso não mexe no cofre).")
+            }
+        }.start()
     }
 
     // Tira tudo do cofre (descriptografado): pede a senha de novo antes
