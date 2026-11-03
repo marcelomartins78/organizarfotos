@@ -1512,7 +1512,7 @@ class MainActivity : Activity() {
             "📥  Mandar uma pasta pro cofre" to { Ferramentas.pastaEspecial()?.let { mandarPastaProCofre(it) } },
             "🔍  Verificar cofre" to { verificarCofre() },
             "🔑  Trocar senha" to { criarPin { aviso("Senha trocada.") } },
-            "⚠️  Devolver tudo para a galeria" to { devolverTudo() },
+            "⚠️  Tirar TUDO do cofre (sem criptografia)" to { devolverTudo() },
             "❎  Limpar seleção" to { selecionadas.clear(); pastasSel.clear(); atualizarLista() }
         )
     }
@@ -1656,9 +1656,22 @@ class MainActivity : Activity() {
         val cofre = cofreRaiz()
         val original = Ferramentas.pastasOcultas().firstOrNull { Ferramentas.ehEspecial(it.first) }?.second
             ?: File(Ferramentas.dcim, Ferramentas.ESPECIAL).absolutePath
+        // Fácil de confundir com "mandar para a pasta principal": pede a senha e a palavra TIRAR
         pedirPin {
-            confirmar("Devolver TUDO do cofre para a galeria? Todas as fotos serão DESCRIPTOGRAFADAS e voltam para " +
-                relativo(File(original).parentFile ?: Ferramentas.raiz) + ", aparecendo de novo na Galeria.") { desocultar(cofre, original) }
+            val campo = EditText(this)
+            campo.hint = "digite TIRAR"
+            campo.setSingleLine(true)
+            AlertDialog.Builder(this)
+                .setTitle("⚠️ Tirar TUDO do cofre")
+                .setMessage("Isto NÃO move pastas dentro do cofre. Todas as fotos SAEM do cofre, DESCRIPTOGRAFADAS, para " +
+                    relativo(File(original).parentFile ?: Ferramentas.raiz) + ", e aparecem na Galeria (e o Google Fotos pode enviar para a nuvem).\n\n" +
+                    "Para mover pastas dentro do cofre, use Mover esta pasta.\n\nPara continuar, digite TIRAR:")
+                .setView(caixa(campo))
+                .setPositiveButton("Tirar tudo") { _, _ ->
+                    if (campo.text.toString().trim().uppercase() == "TIRAR") desocultar(cofre, original) else aviso("Nada foi feito.")
+                }
+                .setNegativeButton("Cancelar", null)
+                .show()
         }
     }
 
