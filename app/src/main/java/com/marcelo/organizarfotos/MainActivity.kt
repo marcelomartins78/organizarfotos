@@ -1049,6 +1049,7 @@ class MainActivity : Activity() {
             "📤  Encaminhar" to { encaminharSelecionadas() },
             "🔒  Mandar pro cofre" to { mandarProCofre() },
             "📁  Pastas das fotos → cofre" to { pastasDasFotos() },
+            "🔍  Verificar cofre" to { verificarCofre() },
             "📂  Mover para..." to { moverParaPasta() },
             "✏️  Renomear" to { confirmarServico("renomear") },
             "👥  Repetidas" to { menuRepetidas() },
@@ -1504,13 +1505,12 @@ class MainActivity : Activity() {
             dePastas.add("🗑️  Excluir esta pasta" to { excluirPastasDoCofre(listOf(pa!!)) })
         }
         if (umaComSubs != null) dePastas.add("⬆  Tirar as subpastas de “${umaComSubs.name}”" to { tirarSubpastas(umaComSubs, Ferramentas.subpastas(umaComSubs)) })
-        return dePastas + listOf(
+        return listOf<Pair<String, () -> Unit>>("🔍  Verificar cofre" to { verificarCofre() }) + dePastas + listOf(
             "📤  Encaminhar" to { encaminharSelecionadas() },
             "📁  Mover para pasta" to { moverNoCofre(sel()) },
             "🔓  Devolver p/ galeria" to { devolverParaGaleria(sel()) },
             "➕  Nova pasta" to { pastaAberta?.let { pa -> novaPasta(pa) { procurar() } } },
             "📥  Mandar uma pasta pro cofre" to { Ferramentas.pastaEspecial()?.let { mandarPastaProCofre(it) } },
-            "🔍  Verificar cofre" to { verificarCofre() },
             "🔑  Trocar senha" to { criarPin { aviso("Senha trocada.") } },
             "⚠️  Tirar TUDO do cofre (sem criptografia)" to { devolverTudo() },
             "❎  Limpar seleção" to { selecionadas.clear(); pastasSel.clear(); atualizarLista() }
