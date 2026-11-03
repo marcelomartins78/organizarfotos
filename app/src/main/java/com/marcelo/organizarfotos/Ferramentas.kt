@@ -234,26 +234,32 @@ object Ferramentas {
 
     private fun ano(d: Date): Int = Calendar.getInstance().apply { time = d }.get(Calendar.YEAR)
 
+    private fun dataExif(e: ExifInterface): Date? {
+        val s = e.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) ?: e.getAttribute(ExifInterface.TAG_DATETIME) ?: return null
+        val d = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).parse(s)
+        return if (d != null && ano(d) > 1980) d else null
+    }
+
+    private fun dataVideo(r: MediaMetadataRetriever): Date? {
+        val s = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE) ?: return null
+        if (s.length < 15) return null
+        val d = SimpleDateFormat("yyyyMMdd'T'HHmmss", Locale.US).parse(s.substring(0, 15))
+        return if (d != null && ano(d) > 1980) d else null
+    }
+
     fun dataDe(f: File): Date {
-        val ext = f.extension.lowercase()
+        // No cofre ("foto.jpg.ofz") a data também é lida de dentro do arquivo, sem descriptografar tudo
+        val cifrado = criptografado(f)
+        val ext = File(nomeReal(f)).extension.lowercase()
         try {
             if (ext in fotos) {
-                val exif = ExifInterface(f)
-                val s = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
-                    ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
-                if (s != null) {
-                    val d = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).parse(s)
-                    if (d != null && ano(d) > 1980) return d
-                }
+                val d = if (cifrado) abrirDecifrado(f).use { dataExif(ExifInterface(it)) } else dataExif(ExifInterface(f))
+                if (d != null) return d
             } else if (ext in videos) {
                 val r = MediaMetadataRetriever()
                 try {
-                    r.setDataSource(f.absolutePath)
-                    val s = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
-                    if (s != null && s.length >= 15) {
-                        val d = SimpleDateFormat("yyyyMMdd'T'HHmmss", Locale.US).parse(s.substring(0, 15))
-                        if (d != null && ano(d) > 1980) return d
-                    }
+                    if (cifrado) r.setDataSource(FonteCifrada(f, chave())) else r.setDataSource(f.absolutePath)
+                    dataVideo(r)?.let { return it }
                 } finally { r.release() }
             }
         } catch (_: Exception) { }
